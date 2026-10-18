@@ -1,0 +1,26 @@
+{
+  "name": "odc-photostudio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ODC-PhotoStudio — Commercial multi-tenant DSLR photobooth platform with offline-first operator desktop and expiring customer gallery",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter ./packages/* build && pnpm -r --filter ./apps/* build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "pnpm -r typecheck",
+    "dev:desktop": "pnpm --filter @odc-photostudio/operator-desktop dev",
+    "dev:web": "pnpm --filter @odc-photostudio/web-portal dev",
+    "simulate:event": "tsx scripts/simulate-event.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "sharp": "^0.33.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
