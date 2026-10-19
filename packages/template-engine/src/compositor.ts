@@ -16,6 +16,7 @@ export interface RenderCompositeInput {
   shotBuffersByIndex: ReadonlyMap<number, Buffer>;
   overlayBuffer: Buffer;
   galleryUrl: string;
+  embedQr?: boolean;
 }
 
 export interface RenderCompositeResult {
@@ -178,18 +179,20 @@ export async function renderCompositeImage(
     top: 0
   });
 
-  // Step 4: Generate and place QR code in reserved high-contrast box
-  const qrBuffer = await generateHighContrastQrBuffer({
-    url: input.galleryUrl,
-    sizePx: template.qr.sizePx,
-    quietZoneModules: template.qr.quietZoneModules
-  });
+  // Step 4: Generate and place QR code in reserved high-contrast box (if soft-copy QR enabled)
+  if (input.embedQr !== false) {
+    const qrBuffer = await generateHighContrastQrBuffer({
+      url: input.galleryUrl,
+      sizePx: template.qr.sizePx,
+      quietZoneModules: template.qr.quietZoneModules
+    });
 
-  compositeLayers.push({
-    input: qrBuffer,
-    left: template.qr.x,
-    top: template.qr.y
-  });
+    compositeLayers.push({
+      input: qrBuffer,
+      left: template.qr.x,
+      top: template.qr.y
+    });
+  }
 
   // Step 5: Render onto canvas background and output deterministic sRGB JPEG without EXIF
   const finalImage = await sharp({
