@@ -351,7 +351,8 @@ describe('ODC-PhotoStudio Acceptance Criteria Suite (A01 through A23)', () => {
       orchestrator.submitPrint({
         sessionId: session.session_id,
         printProfileId: printProfile.id,
-        isReprint: true
+        isReprint: true,
+        nowIso: '2026-10-18T08:00:25.000Z'
       })
     ).rejects.toThrow(/requires operator inspection/);
 
@@ -365,7 +366,8 @@ describe('ODC-PhotoStudio Acceptance Criteria Suite (A01 through A23)', () => {
     const reprint = await orchestrator.submitPrint({
       sessionId: session.session_id,
       printProfileId: printProfile.id,
-      isReprint: true
+      isReprint: true,
+      nowIso: '2026-10-18T08:00:30.000Z'
     });
     expect(reprint.attempt.state).toBe('submitted');
     expect(reprint.attempt.is_reprint).toBe(1);
@@ -475,7 +477,8 @@ describe('ODC-PhotoStudio Acceptance Criteria Suite (A01 through A23)', () => {
     const reprint = await orchestrator.submitPrint({
       sessionId: session.session_id,
       printProfileId: printProfile.id,
-      isReprint: true
+      isReprint: true,
+      nowIso: '2026-10-18T08:03:30.000Z'
     });
     const printedArtifactSha = computeBufferSha256(
       fs.readFileSync(reprint.result.previewArtifactPath!)

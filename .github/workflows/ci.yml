@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Typecheck, Test & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run TypeScript typecheck
+        run: pnpm typecheck
+
+      - name: Run test suite (A01 through A23 acceptance suite + hardware adapters)
+        run: pnpm test
+
+      - name: Verify desktop packaging configuration and secret guard
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = "apps/operator-desktop/electron-builder.json";
+            if (!fs.existsSync(path)) {
+              throw new Error("electron-builder.json missing");
+            }
+            const cfg = JSON.parse(fs.readFileSync(path, "utf8"));
+            
+            // 1. Verify NSIS x64 target
+            const winTarget = cfg.win?.target;
+            const hasNsisX64 = Array.isArray(winTarget) && winTarget.some(t => t.target === "nsis" && t.arch.includes("x64"));
+            if (!hasNsisX64) {
+              throw new Error("electron-builder must target Windows x64 NSIS");
+            }
+
+            // 2. Verify sharp native binaries asarUnpack
+            if (!cfg.asarUnpack?.some(p => p.includes("sharp"))) {
+              throw new Error("electron-builder missing sharp in asarUnpack");
+            }
+            if (!cfg.asarUnpack?.some(p => p.includes("@img/sharp-win32-x64"))) {
+              throw new Error("electron-builder missing @img/sharp-win32-x64 in asarUnpack");
+            }
+
+            // 3. Verify secrets and private keys are strictly excluded
+            const forbiddenPatterns = [".env", "private-key", "secret"];
+            for (const item of forbiddenPatterns) {
+              const excluded = cfg.files?.some(f => f.startsWith("!") && f.toLowerCase().includes(item));
+              if (!excluded) {
+                throw new Error("Missing exclusion rule for sensitive pattern: " + item);
+              }
+            }
+
+            // 4. Verify icon exists
+            if (!fs.existsSync("apps/operator-desktop/build/icon.ico")) {
+              throw new Error("Window icon missing at apps/operator-desktop/build/icon.ico");
+            }
+
+            console.log("Packaging configuration and secret guard passed verification.");
+          '
+
+      - name: Build packages and applications
+        run: pnpm build

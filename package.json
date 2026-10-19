@@ -14,11 +14,14 @@
     "typecheck": "pnpm -r typecheck",
     "dev:desktop": "pnpm --filter @odc-photostudio/operator-desktop dev",
     "dev:web": "pnpm --filter @odc-photostudio/web-portal dev",
-    "simulate:event": "tsx scripts/simulate-event.ts"
+    "simulate:event": "tsx scripts/simulate-event.ts",
+    "provision:keys": "tsx scripts/generate-production-keys.ts",
+    "package:desktop": "pnpm --filter @odc-photostudio/operator-desktop dist"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
     "sharp": "^0.33.5",
+    "supabase": "^2.121.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
