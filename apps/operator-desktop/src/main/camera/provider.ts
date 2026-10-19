@@ -257,3 +257,5 @@ export class UnqualifiedRealCameraProvider implements ICameraProvider {
     // no-op
   }
 }
+
+export * from './real-camera-provider.js';

@@ -365,6 +365,15 @@ export class DurableSyncEngine {
     const job = this.db.mapDurableJobRow(jobRow);
     const session = this.db.getSessionOrThrow(job.sessionId);
 
+    // If grant explicitly disables softCopyQr, do not upload session to cloud gallery (Plan §3)
+    const prepared = this.db.getPreparedEventPackage(session.event_id);
+    if (prepared && prepared.grant.payload.softCopyQr === false) {
+      this.db.db
+        .prepare(`UPDATE durable_jobs SET state = 'cancelled', updated_at = ? WHERE job_id = ?`)
+        .run(now, job.jobId);
+      return { processed: true, sessionId: session.session_id, finalState: 'cancelled' };
+    }
+
     // Check expiration before starting upload (Section 8 & 9.1 / A10)
     if (session.expires_at && Date.parse(session.expires_at) <= nowMs) {
       this.deleteSessionLocalMedia(session.session_id, session.session_dir, now);

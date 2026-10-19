@@ -334,6 +334,13 @@ export class StationOrchestrator {
       );
     }
 
+    if (prepared.grant.payload.maxTransactionsPerDay != null) {
+      const count = this.db.countCompletedTransactionsToday(params.nowIso);
+      if (count >= prepared.grant.payload.maxTransactionsPerDay) {
+        throw new Error('PLAN_LIMIT_EXCEEDED: Daily transaction limit exceeded for this plan. New sessions are blocked.');
+      }
+    }
+
     const sessionId = generateSessionId();
     const rawGalleryToken = generateGalleryToken();
     const tokenHash = hashGalleryToken(rawGalleryToken, this.tokenPepper);
@@ -531,11 +538,13 @@ export class StationOrchestrator {
     const overlayBuffer = fs.readFileSync(tplEntry.overlayFilePath);
     const galleryUrl = this.getProtectedGalleryUrl(params.sessionId);
 
+    const embedQr = prepared.grant.payload.softCopyQr !== false;
     const rendered = await renderCompositeImage({
       template: tplEntry.definition,
       shotBuffersByIndex,
       overlayBuffer,
-      galleryUrl
+      galleryUrl,
+      embedQr
     });
 
     const compositeAssetId = crypto.randomUUID();
@@ -593,6 +602,7 @@ export class StationOrchestrator {
       ]
     });
 
+    const enqueueUpload = prepared.grant.payload.softCopyQr !== false;
     const { session: committedSession } = this.db.commitApprovedSessionAndEnqueueUpload({
       sessionId: params.sessionId,
       compositeAsset: {
@@ -604,7 +614,8 @@ export class StationOrchestrator {
         sha256: rendered.sha256
       },
       manifest,
-      approvedAtIso
+      approvedAtIso,
+      enqueueUpload
     });
 
     return {
@@ -719,6 +730,60 @@ export class StationOrchestrator {
       nowIso,
       clockHealthy: clock.healthy
     });
+  }
+
+  public async enrollStationWithCode(params: {
+    serverUrl: string;
+    code: string;
+    deviceLabel?: string;
+  }): Promise<{
+    tenantId: string;
+    stationId: string;
+    status: string;
+    plan: string;
+  }> {
+    const cleanServerUrl = params.serverUrl.replace(/\/+$/, '');
+    const url = `${cleanServerUrl}/api/v1/station/enroll`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        code: params.code.trim().toUpperCase(),
+        deviceLabel: params.deviceLabel ?? 'Operator Desktop'
+      })
+    });
+
+    if (!response.ok) {
+      let errorMsg = `Enrollment failed with status ${response.status}`;
+      try {
+        const errorJson = (await response.json()) as { error?: string; message?: string };
+        errorMsg = errorJson.error || errorJson.message || errorMsg;
+      } catch {
+        // use default error message
+      }
+      throw new Error(errorMsg);
+    }
+
+    const data = (await response.json()) as {
+      tenantId: string;
+      stationId: string;
+      status: string;
+      plan: string;
+    };
+
+    // Save stationId, tenantId, serverUrl, and plan to local database configuration
+    this.db.setStationConfig('station_id', data.stationId);
+    this.db.setStationConfig('tenant_id', data.tenantId);
+    this.db.setStationConfig('server_url', cleanServerUrl);
+    this.db.setStationConfig('plan', data.plan);
+    if (data.status) {
+      this.db.setStationConfig('status', data.status);
+    }
+
+    return data;
   }
 
   public close(): void {

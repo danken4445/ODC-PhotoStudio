@@ -259,6 +259,12 @@ export class StationDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS station_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_sessions_tenant_event ON sessions(tenant_id, event_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
       CREATE INDEX IF NOT EXISTS idx_durable_jobs_next_attempt ON durable_jobs(state, next_attempt_at);
@@ -269,6 +275,7 @@ export class StationDatabase {
       `INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`
     );
     insertMigration.run(1, new Date().toISOString());
+    insertMigration.run(2, new Date().toISOString());
   }
 
   public recordTransition(params: {
@@ -589,7 +596,8 @@ export class StationDatabase {
     };
     manifest: ApprovedSessionManifest;
     approvedAtIso: string;
-  }): { session: LocalSessionRow; job: DurableJob } {
+    enqueueUpload?: boolean;
+  }): { session: LocalSessionRow; job?: DurableJob } {
     return this.transaction(() => {
       const current = this.getSessionOrThrow(params.sessionId);
 
@@ -659,38 +667,44 @@ export class StationDatabase {
           params.sessionId
         );
 
-      const jobId = crypto.randomUUID();
-      const idempotencyKey = `reg:${params.sessionId}:v${params.manifest.manifestVersion}`;
+      let job: DurableJob | undefined;
+      if (params.enqueueUpload !== false) {
+        const jobId = crypto.randomUUID();
+        const idempotencyKey = `reg:${params.sessionId}:v${params.manifest.manifestVersion}`;
 
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO durable_jobs (
-            job_id, job_type, session_id, tenant_id, event_id, station_id,
-            idempotency_key, manifest_version, state, attempt_count,
-            next_attempt_at, lease_owner, lease_expires_at, error_code, diagnostic_text,
-            created_at, updated_at
-          ) VALUES (?, 'register_session', ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, NULL, ?, ?)`
-        )
-        .run(
-          jobId,
-          params.sessionId,
-          current.tenant_id,
-          current.event_id,
-          current.station_id,
-          idempotencyKey,
-          params.manifest.manifestVersion,
-          params.approvedAtIso,
-          params.approvedAtIso,
-          params.approvedAtIso
-        );
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO durable_jobs (
+              job_id, job_type, session_id, tenant_id, event_id, station_id,
+              idempotency_key, manifest_version, state, attempt_count,
+              next_attempt_at, lease_owner, lease_expires_at, error_code, diagnostic_text,
+              created_at, updated_at
+            ) VALUES (?, 'register_session', ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, NULL, ?, ?)`
+          )
+          .run(
+            jobId,
+            params.sessionId,
+            current.tenant_id,
+            current.event_id,
+            current.station_id,
+            idempotencyKey,
+            params.manifest.manifestVersion,
+            params.approvedAtIso,
+            params.approvedAtIso,
+            params.approvedAtIso
+          );
 
-      const jobRow = this.db
-        .prepare(`SELECT * FROM durable_jobs WHERE idempotency_key = ?`)
-        .get(idempotencyKey) as Record<string, unknown>;
+        const jobRow = this.db
+          .prepare(`SELECT * FROM durable_jobs WHERE idempotency_key = ?`)
+          .get(idempotencyKey) as Record<string, unknown>;
+        if (jobRow) {
+          job = this.mapDurableJobRow(jobRow);
+        }
+      }
 
       return {
         session: this.getSessionOrThrow(params.sessionId),
-        job: this.mapDurableJobRow(jobRow)
+        job
       };
     });
   }
@@ -873,4 +887,77 @@ export class StationDatabase {
       updatedAt: String(row.updated_at)
     };
   }
+
+  public countCompletedTransactionsToday(nowIso?: string, timezone?: string): number {
+    const now = nowIso ? new Date(nowIso) : new Date();
+
+    // Determine start and end of the calendar day in the target timezone
+    let dateStr: string;
+    if (timezone) {
+      try {
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+          timeZone: timezone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        dateStr = formatter.format(now); // "YYYY-MM-DD"
+      } catch {
+        dateStr = now.toISOString().slice(0, 10);
+      }
+    } else {
+      dateStr = now.toISOString().slice(0, 10);
+    }
+
+    const startOfDayUtc = new Date(`${dateStr}T00:00:00.000Z`).toISOString();
+    const endOfDayUtc = new Date(`${dateStr}T23:59:59.999Z`).toISOString();
+
+    // Completed session definition (§3):
+    // 1. Sessions reaching print_state = completed (or print attempt with state = 'submitted' | 'completed')
+    // 2. Exclude reprints (is_reprint = 1)
+    // 3. Exclude cancelled/failed prints
+    // Count unique session_ids to avoid double counting multiple successful print attempts of the same session
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(DISTINCT p.session_id) as cnt
+         FROM print_attempts p
+         WHERE p.is_reprint = 0
+           AND p.state IN ('submitted', 'confirmed', 'completed')
+           AND p.created_at >= ?
+           AND p.created_at <= ?`
+      )
+      .get(startOfDayUtc, endOfDayUtc) as { cnt: number } | undefined;
+
+    return row?.cnt ?? 0;
+  }
+
+  public setStationConfig(key: string, value: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO station_config (key, value, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+      )
+      .run(key, value, now);
+  }
+
+  public getStationConfig(key: string): string | null {
+    const row = this.db
+      .prepare(`SELECT value FROM station_config WHERE key = ?`)
+      .get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  public getStationConfigMap(): Record<string, string> {
+    const rows = this.db
+      .prepare(`SELECT key, value FROM station_config`)
+      .all() as Array<{ key: string; value: string }>;
+    const map: Record<string, string> = {};
+    for (const r of rows) {
+      map[r.key] = r.value;
+    }
+    return map;
+  }
 }
+

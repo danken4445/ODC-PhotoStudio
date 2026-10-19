@@ -114,3 +114,5 @@ export class MockPrinterProvider implements IPrinterProvider {
     };
   }
 }
+
+export * from './windows-spooler-provider.js';

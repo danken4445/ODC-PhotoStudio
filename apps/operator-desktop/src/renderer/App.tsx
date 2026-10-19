@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Camera,
@@ -6,17 +6,32 @@ import {
   Clock,
   CloudUpload,
   HardDrive,
+  KeyRound,
   LayoutGrid,
   Printer,
   RefreshCw,
+  Server,
   ShieldAlert,
   Wifi,
-  WifiOff
+  WifiOff,
+  X
 } from 'lucide-react';
 import { useOperatorStore } from './store.js';
 
 export function OperatorCaptureApp(): React.JSX.Element {
   const store = useOperatorStore();
+  const [enrollmentCode, setEnrollmentCode] = useState('');
+  const [enrollServerUrl, setEnrollServerUrl] = useState('http://localhost:3000');
+
+  useEffect(() => {
+    void store.loadInitialState();
+  }, []);
+
+  useEffect(() => {
+    if (store.serverUrl) {
+      setEnrollServerUrl(store.serverUrl);
+    }
+  }, [store.serverUrl]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -72,6 +87,184 @@ export function OperatorCaptureApp(): React.JSX.Element {
 
   const currentTemplate = store.availableTemplates[store.selectedTemplateIndex];
 
+  // If station is not enrolled, show Station Activation / Enrollment Screen (§2, §3, §6)
+  if (!store.isEnrolled) {
+    return (
+      <div
+        style={{
+          backgroundColor: '#09090B',
+          color: '#FAFAFA',
+          minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          padding: '24px'
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: '460px',
+            backgroundColor: '#18181B',
+            border: '1px solid #27272A',
+            borderRadius: '12px',
+            padding: '32px',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+            <div
+              style={{
+                backgroundColor: '#27272A',
+                padding: '10px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+            >
+              <KeyRound size={24} color="#FAFAFA" />
+            </div>
+            <div>
+              <h1 style={{ fontSize: '20px', fontWeight: 700, margin: 0, letterSpacing: '-0.02em' }}>
+                ODC PhotoStudio Station Activation
+              </h1>
+              <p style={{ fontSize: '13px', color: '#A1A1AA', margin: '4px 0 0 0' }}>
+                Enter the one-time enrollment code provided by your platform administrator.
+              </p>
+            </div>
+          </div>
+
+          {store.enrollmentError && (
+            <div
+              role="alert"
+              style={{
+                backgroundColor: '#3F1D1D',
+                border: '1px solid #7F1D1D',
+                borderRadius: '6px',
+                padding: '12px',
+                fontSize: '13px',
+                color: '#FECACA',
+                marginBottom: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              <AlertTriangle size={16} />
+              <span>{store.enrollmentError}</span>
+            </div>
+          )}
+
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (enrollmentCode.trim()) {
+                await store.enrollStation(enrollmentCode, enrollServerUrl);
+              }
+            }}
+            style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
+          >
+            <div>
+              <label
+                htmlFor="serverUrl"
+                style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '6px' }}
+              >
+                Server URL
+              </label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  id="serverUrl"
+                  type="url"
+                  required
+                  value={enrollServerUrl}
+                  onChange={(e) => setEnrollServerUrl(e.target.value)}
+                  placeholder="http://localhost:3000"
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#09090B',
+                    border: '1px solid #3F3F46',
+                    borderRadius: '6px',
+                    padding: '10px 12px',
+                    color: '#FAFAFA',
+                    fontSize: '14px',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="enrollmentCode"
+                style={{ display: 'block', fontSize: '13px', fontWeight: 500, marginBottom: '6px' }}
+              >
+                One-Time Enrollment Code
+              </label>
+              <input
+                id="enrollmentCode"
+                type="text"
+                required
+                autoFocus
+                value={enrollmentCode}
+                onChange={(e) => setEnrollmentCode(e.target.value.toUpperCase())}
+                placeholder="e.g. ODC-ST-ABCD12"
+                style={{
+                  width: '100%',
+                  backgroundColor: '#09090B',
+                  border: '1px solid #3F3F46',
+                  borderRadius: '6px',
+                  padding: '12px',
+                  color: '#FAFAFA',
+                  fontSize: '16px',
+                  fontFamily: 'monospace',
+                  letterSpacing: '0.1em',
+                  boxSizing: 'border-box',
+                  textTransform: 'uppercase'
+                }}
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={store.isEnrolling || !enrollmentCode.trim()}
+              style={{
+                backgroundColor: '#2563EB',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '12px 16px',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: store.isEnrolling ? 'not-allowed' : 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                marginTop: '8px',
+                opacity: store.isEnrolling || !enrollmentCode.trim() ? 0.6 : 1
+              }}
+            >
+              {store.isEnrolling ? (
+                <>
+                  <RefreshCw size={16} className="animate-spin" />
+                  Activating Station...
+                </>
+              ) : (
+                'Activate Station'
+              )}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  const planLabel = store.stationPlan.toUpperCase();
+  const capLabel = store.maxTransactionsPerDay != null ? `${store.maxTransactionsPerDay}` : 'Unlimited';
+
   return (
     <div
       style={{
@@ -106,7 +299,20 @@ export function OperatorCaptureApp(): React.JSX.Element {
               fontSize: '12px'
             }}
           >
-            Station: ST-01
+            Station: {store.activeStationId.slice(0, 8)}
+          </span>
+          <span
+            style={{
+              backgroundColor: '#1E293B',
+              border: '1px solid #334155',
+              color: '#93C5FD',
+              padding: '4px 10px',
+              borderRadius: '4px',
+              fontSize: '12px',
+              fontWeight: 600
+            }}
+          >
+            Plan: {planLabel} | Today: {store.dailyTransactionsCount} / {capLabel}
           </span>
           {store.simulationLabel && (
             <span
@@ -583,6 +789,147 @@ export function OperatorCaptureApp(): React.JSX.Element {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Sync Queue Drawer */}
+      {store.isSyncDrawerOpen && (
+        <aside
+          role="region"
+          aria-label="Background Sync Queue"
+          style={{
+            position: 'fixed',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: '400px',
+            backgroundColor: '#18181B',
+            borderLeft: '1px solid #27272A',
+            display: 'flex',
+            flexDirection: 'column',
+            zIndex: 50,
+            boxShadow: '-4px 0 24px rgba(0, 0, 0, 0.5)'
+          }}
+        >
+          <div
+            style={{
+              padding: '16px',
+              borderBottom: '1px solid #27272A',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+              <CloudUpload size={18} />
+              <span>Durable Sync Queue ({store.syncQueue.length})</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => store.setSyncDrawerOpen(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#A1A1AA',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center'
+              }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid #27272A', display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => void store.triggerSyncNow()}
+              style={{
+                flex: 1,
+                backgroundColor: '#27272A',
+                color: '#FAFAFA',
+                border: '1px solid #3F3F46',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px'
+              }}
+            >
+              <RefreshCw size={14} />
+              Trigger Sync Now
+            </button>
+            <button
+              type="button"
+              onClick={() => void store.refreshSyncQueue()}
+              style={{
+                backgroundColor: '#09090B',
+                color: '#A1A1AA',
+                border: '1px solid #27272A',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                fontSize: '13px',
+                cursor: 'pointer'
+              }}
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {store.syncQueue.length === 0 ? (
+              <div style={{ textAlign: 'center', color: '#71717A', marginTop: '40px', fontSize: '14px' }}>
+                No active or pending sync jobs.
+              </div>
+            ) : (
+              store.syncQueue.map((job) => (
+                <div
+                  key={job.sessionId}
+                  style={{
+                    backgroundColor: '#09090B',
+                    border: '1px solid #27272A',
+                    borderRadius: '6px',
+                    padding: '12px',
+                    fontSize: '12px'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <span style={{ fontFamily: 'monospace', color: '#FAFAFA' }}>
+                      {job.sessionId.slice(0, 8)}...
+                    </span>
+                    <span
+                      style={{
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        fontWeight: 600,
+                        backgroundColor:
+                          job.uploadState === 'published'
+                            ? '#14532D'
+                            : job.uploadState === 'failed'
+                              ? '#7F1D1D'
+                              : '#27272A',
+                        color: '#FAFAFA'
+                      }}
+                    >
+                      {job.uploadState.toUpperCase()}
+                    </span>
+                  </div>
+                  <div style={{ color: '#A1A1AA', marginBottom: '4px' }}>
+                    Attempts: {job.attemptCount}
+                  </div>
+                  {job.diagnosticText && (
+                    <div style={{ color: '#71717A', fontSize: '11px', wordBreak: 'break-word' }}>
+                      {job.diagnosticText}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </aside>
       )}
     </div>
   );

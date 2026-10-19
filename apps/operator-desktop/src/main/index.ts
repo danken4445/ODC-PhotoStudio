@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { app, BrowserWindow, ipcMain, session as electronSession } from 'electron';
 import { z } from 'zod';
@@ -5,9 +6,15 @@ import {
   CreateSessionIpcRequestSchema,
   ResolveUnknownPrintIpcRequestSchema,
   SubmitPrintIpcRequestSchema,
-  TriggerCaptureIpcRequestSchema
+  TriggerCaptureIpcRequestSchema,
+  type UploadState
 } from '@odc-photostudio/contracts';
-import type { StationOrchestrator } from './orchestrator.js';
+import { StationOrchestrator } from './orchestrator.js';
+import { HttpCloudSyncTransport } from './queue/http-transport.js';
+import { MockCameraProvider, type ICameraProvider } from './camera/provider.js';
+import { RealCameraProvider } from './camera/real-camera-provider.js';
+import { MockPrinterProvider, type IPrinterProvider } from './printer/provider.js';
+import { WindowsSpoolerPrinterProvider } from './printer/windows-spooler-provider.js';
 
 export const SECURITY_WINDOW_PREFERENCES = {
   contextIsolation: true,
@@ -18,15 +25,23 @@ export const SECURITY_WINDOW_PREFERENCES = {
 } as const;
 
 export const CONTENT_SECURITY_POLICY =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'";
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: odc-media:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'";
 
-export function registerValidatedIpcHandlers(orchestrator: StationOrchestrator): void {
-  ipcMain.handle('odc:preflight:status', (_event, rawPayload: unknown) => {
+function safeHandle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any): void {
+  ipcMain.removeHandler(channel);
+  ipcMain.handle(channel, listener);
+}
+
+export function registerValidatedIpcHandlers(
+  orchestrator: StationOrchestrator,
+  httpTransport?: HttpCloudSyncTransport
+): void {
+  safeHandle('odc:preflight:status', (_event, rawPayload: unknown) => {
     const { eventId } = z.object({ eventId: z.string().uuid() }).parse(rawPayload);
     return orchestrator.evaluatePreflight(eventId);
   });
 
-  ipcMain.handle('odc:session:start', (_event, rawPayload: unknown) => {
+  safeHandle('odc:session:start', (_event, rawPayload: unknown) => {
     const req = CreateSessionIpcRequestSchema.parse(rawPayload);
     const { session } = orchestrator.startSession({
       eventId: req.eventId,
@@ -35,7 +50,7 @@ export function registerValidatedIpcHandlers(orchestrator: StationOrchestrator):
     return { sessionId: session.session_id };
   });
 
-  ipcMain.handle('odc:session:capture', async (_event, rawPayload: unknown) => {
+  safeHandle('odc:session:capture', async (_event, rawPayload: unknown) => {
     const req = TriggerCaptureIpcRequestSchema.parse(rawPayload);
     const { session, capture } = await orchestrator.captureFrame({
       sessionId: req.sessionId,
@@ -48,7 +63,7 @@ export function registerValidatedIpcHandlers(orchestrator: StationOrchestrator):
     };
   });
 
-  ipcMain.handle('odc:session:approve', async (_event, rawPayload: unknown) => {
+  safeHandle('odc:session:approve', async (_event, rawPayload: unknown) => {
     const { sessionId } = z.object({ sessionId: z.string().uuid() }).parse(rawPayload);
     const { session } = await orchestrator.approveAndCompositeSession({ sessionId });
     return {
@@ -59,7 +74,7 @@ export function registerValidatedIpcHandlers(orchestrator: StationOrchestrator):
     };
   });
 
-  ipcMain.handle('odc:print:submit', async (_event, rawPayload: unknown) => {
+  safeHandle('odc:print:submit', async (_event, rawPayload: unknown) => {
     const req = SubmitPrintIpcRequestSchema.parse(rawPayload);
     const { attempt, result } = await orchestrator.submitPrint({
       sessionId: req.sessionId,
@@ -74,7 +89,7 @@ export function registerValidatedIpcHandlers(orchestrator: StationOrchestrator):
     };
   });
 
-  ipcMain.handle('odc:print:resolve-unknown', (_event, rawPayload: unknown) => {
+  safeHandle('odc:print:resolve-unknown', (_event, rawPayload: unknown) => {
     const req = ResolveUnknownPrintIpcRequestSchema.parse(rawPayload);
     const updated = orchestrator.resolveUnknownPrintAttempt({
       attemptId: req.attemptId,
@@ -86,17 +101,119 @@ export function registerValidatedIpcHandlers(orchestrator: StationOrchestrator):
       state: updated.state
     };
   });
+
+  // UI Queue Inspection: Returns durable queue jobs and aggregate statistics
+  safeHandle('odc:sync:status', () => {
+    const rows = orchestrator.db.db
+      .prepare(
+        `SELECT job_id, session_id, state, attempt_count, diagnostic_text, error_code, next_attempt_at, updated_at
+         FROM durable_jobs
+         ORDER BY created_at DESC`
+      )
+      .all() as Array<{
+        job_id: string;
+        session_id: string;
+        state: string;
+        attempt_count: number;
+        diagnostic_text: string | null;
+        error_code: string | null;
+        next_attempt_at: string;
+        updated_at: string;
+      }>;
+
+    const queue = rows.map((r) => ({
+      jobId: r.job_id,
+      sessionId: r.session_id,
+      uploadState: r.state as UploadState,
+      state: r.state as UploadState,
+      attemptCount: r.attempt_count,
+      diagnosticText: r.diagnostic_text,
+      errorCode: r.error_code,
+      nextAttemptAt: r.next_attempt_at,
+      updatedAt: r.updated_at
+    }));
+
+    const pendingCount = rows.filter(
+      (r) => r.state === 'pending' || r.state === 'retry_scheduled'
+    ).length;
+    const publishedCount = rows.filter((r) => r.state === 'published').length;
+    const failedCount = rows.filter((r) => r.state === 'failed').length;
+    const blockedAuthCount = rows.filter((r) => r.state === 'blocked_auth').length;
+
+    return {
+      queue,
+      pendingCount,
+      publishedCount,
+      failedCount,
+      blockedAuthCount
+    };
+  });
+
+  // Immediate Sync Cycle Trigger: UI button or drawer manual trigger
+  safeHandle('odc:sync:trigger', async () => {
+    const transport = httpTransport ?? new HttpCloudSyncTransport();
+    return orchestrator.syncNextPendingJob(transport);
+  });
+
+  safeHandle('odc:station:enroll', async (_event, rawPayload: unknown) => {
+    const payload = z
+      .object({
+        serverUrl: z.string().url(),
+        code: z.string().min(6),
+        deviceLabel: z.string().optional()
+      })
+      .parse(rawPayload);
+    return orchestrator.enrollStationWithCode(payload);
+  });
+
+  safeHandle('odc:station:enrollment-status', () => {
+    const cfg = orchestrator.db.getStationConfigMap();
+    const stationId = cfg.station_id || orchestrator.stationId;
+    const tenantId = cfg.tenant_id;
+    const plan = cfg.plan;
+    const serverUrl = cfg.server_url;
+
+    // Check if station has been enrolled (not empty, not default placeholder ST-01 if configured)
+    const isEnrolled = Boolean(cfg.station_id || (stationId && stationId !== '30000000-0000-4000-8000-000000000001'));
+    const dailyTransactionsCount = orchestrator.db.countCompletedTransactionsToday();
+
+    // Check active grant for maxTransactionsPerDay if event package exists
+    let maxTransactionsPerDay: number | null = null;
+    const allPackages = orchestrator.db.db
+      .prepare(`SELECT grant_json FROM cached_event_packages LIMIT 1`)
+      .get() as { grant_json: string } | undefined;
+    if (allPackages) {
+      try {
+        const grant = JSON.parse(allPackages.grant_json) as { payload?: { maxTransactionsPerDay?: number | null } };
+        maxTransactionsPerDay = grant.payload?.maxTransactionsPerDay ?? null;
+      } catch {
+        // ignore
+      }
+    }
+
+    return {
+      enrolled: isEnrolled,
+      stationId,
+      tenantId,
+      plan: plan || 'basic',
+      serverUrl,
+      dailyTransactionsCount,
+      maxTransactionsPerDay
+    };
+  });
 }
 
 export function createOperatorWindow(preloadPath: string, rendererUrl: string): BrowserWindow {
-  electronSession.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [CONTENT_SECURITY_POLICY]
-      }
+  if (electronSession?.defaultSession?.webRequest) {
+    electronSession.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [CONTENT_SECURITY_POLICY]
+        }
+      });
     });
-  });
+  }
 
   const win = new BrowserWindow({
     width: 1440,
@@ -114,19 +231,146 @@ export function createOperatorWindow(preloadPath: string, rendererUrl: string): 
   // Restrict external navigation and new window creation (Section 15)
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event, navigationUrl) => {
-    if (!navigationUrl.startsWith(rendererUrl)) {
+    if (
+      !navigationUrl.startsWith(rendererUrl) &&
+      !navigationUrl.startsWith('file://')
+    ) {
       event.preventDefault();
     }
   });
 
-  void win.loadURL(rendererUrl);
+  if (rendererUrl.startsWith('http://') || rendererUrl.startsWith('https://')) {
+    void win.loadURL(rendererUrl);
+  } else if (rendererUrl.startsWith('file://')) {
+    void win.loadURL(rendererUrl);
+  } else {
+    void win.loadFile(rendererUrl);
+  }
+
   return win;
+}
+
+let activeOrchestrator: StationOrchestrator | null = null;
+let backgroundSyncTimer: NodeJS.Timeout | null = null;
+
+export async function bootstrapMainProcess(): Promise<{
+  orchestrator: StationOrchestrator;
+  httpTransport: HttpCloudSyncTransport;
+  window?: BrowserWindow;
+}> {
+  // 1. Read configuration from environment
+  const dataDir =
+    process.env.ODC_DATA_DIR ||
+    (app?.getPath ? path.join(app.getPath('userData'), 'odc-station') : path.join(process.cwd(), 'data'));
+  const stationId = process.env.ODC_STATION_ID || '30000000-0000-4000-8000-000000000001';
+  const desktopMode = (process.env.ODC_DESKTOP_MODE as 'real' | 'mock') || 'mock';
+  const grantPublicKeyPem = process.env.OFFLINE_GRANT_PUBLIC_KEY_PEM || '';
+  const portalApiUrl = process.env.ODC_PORTAL_API_URL || 'http://localhost:3000';
+  const tokenPepper = process.env.TOKEN_PEPPER_SECRET || '';
+
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  // 2. Select Mock vs Real camera and printer providers based on ODC_DESKTOP_MODE
+  let camera: ICameraProvider;
+  let printer: IPrinterProvider;
+
+  if (desktopMode === 'real') {
+    camera = new RealCameraProvider({
+      resolveSessionDir: (sessionId: string) => path.join(dataDir, 'sessions', sessionId)
+    });
+    printer = new WindowsSpoolerPrinterProvider({
+      printCacheDir: path.join(dataDir, 'prints')
+    });
+  } else {
+    camera = new MockCameraProvider((sessionId: string) =>
+      path.join(dataDir, 'sessions', sessionId)
+    );
+    printer = new MockPrinterProvider(path.join(dataDir, 'prints'));
+  }
+
+  try {
+    await camera.initialize();
+  } catch (err) {
+    console.warn('Camera initialization warning:', err);
+  }
+
+  // 3. Instantiate StationOrchestrator
+  const orchestrator = new StationOrchestrator({
+    dataDir,
+    stationId,
+    camera,
+    printer,
+    grantPublicKeyPem,
+    tokenPepper
+  });
+  activeOrchestrator = orchestrator;
+
+  // 4. Run Startup Reconciliation before accepting jobs or opening UI
+  const reconciliationReport = orchestrator.syncEngine.runStartupReconciliation();
+  console.log('Startup reconciliation completed:', reconciliationReport);
+
+  // 5. Instantiate HttpCloudSyncTransport
+  const httpTransport = new HttpCloudSyncTransport({
+    baseUrl: portalApiUrl
+  });
+
+  // 6. Register validated IPC handlers
+  registerValidatedIpcHandlers(orchestrator, httpTransport);
+
+  // 7. Start background sync timer (every 3 seconds)
+  if (backgroundSyncTimer) {
+    clearInterval(backgroundSyncTimer);
+  }
+  backgroundSyncTimer = setInterval(async () => {
+    try {
+      await orchestrator.syncNextPendingJob(httpTransport);
+    } catch {
+      // transient background failures handled gracefully by sync engine
+    }
+  }, 3000);
+
+  // 8. Create and load operator window
+  let window: BrowserWindow | undefined;
+  if (app?.isReady && app.isReady()) {
+    const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+    const rendererUrl =
+      process.env.VITE_DEV_SERVER_URL ||
+      (isDev ? 'http://localhost:5173' : path.join(__dirname, '../renderer/index.html'));
+    const preloadPath = path.join(__dirname, '../preload/index.js');
+    window = createOperatorWindow(preloadPath, rendererUrl);
+  }
+
+  return { orchestrator, httpTransport, window };
 }
 
 if (app && typeof app.whenReady === 'function') {
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
     app.quit();
+  } else {
+    app.whenReady().then(async () => {
+      try {
+        await bootstrapMainProcess();
+      } catch (err) {
+        console.error('Fatal error during application startup:', err);
+        app.quit();
+      }
+    });
+
+    app.on('window-all-closed', () => {
+      if (process.platform !== 'darwin') {
+        if (backgroundSyncTimer) {
+          clearInterval(backgroundSyncTimer);
+          backgroundSyncTimer = null;
+        }
+        if (activeOrchestrator) {
+          activeOrchestrator.close();
+          activeOrchestrator = null;
+        }
+        app.quit();
+      }
+    });
   }
 }
+
 export { path };

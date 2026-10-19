@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.odcphotostudio.operator",
+  "productName": "ODC-PhotoStudio Operator Console",
+  "copyright": "Copyright © 2026 ODC-PhotoStudio",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "package.json",
+    "!**/*.tsbuildinfo",
+    "!**/.env*",
+    "!**/*.env",
+    "!**/*secret*",
+    "!**/*Secret*",
+    "!**/*private-key*",
+    "!**/*private*.pem",
+    "!**/service_role*",
+    "!**/*.test.*",
+    "!**/__tests__/**"
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/sharp/**/*",
+    "**/node_modules/@img/sharp-win32-x64/**/*",
+    "**/node_modules/@img/**/*"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "allowElevation": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "ODC-PhotoStudio Operator Console"
+  }
+}
