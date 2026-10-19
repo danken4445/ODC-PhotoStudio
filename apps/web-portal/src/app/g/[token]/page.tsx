@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Clock, Download, RefreshCw, ShieldAlert, Smartphone } from 'lucide-react';
 import type { GalleryLookupResponse } from '@odc-photostudio/contracts';
 
@@ -27,13 +27,59 @@ export default function CustomerGalleryPage({
   });
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [autoPollStopped, setAutoPollStopped] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     void params.then((resolved) => setToken(resolved.token));
   }, [params]);
 
+  const fetchGalleryStatus = useCallback(
+    async (rawTok: string, elapsed: number) => {
+      if (!rawTok) return;
+      try {
+        setLoading(true);
+        const res = await fetch(
+          `/api/v1/gallery/${encodeURIComponent(rawTok)}?elapsed=${elapsed}`
+        );
+        if (res.ok) {
+          const data: GalleryLookupResponse = await res.json();
+          setGallery(data);
+          if (data.state !== 'registered_pending') {
+            setAutoPollStopped(true);
+          }
+        } else {
+          setGallery({
+            apiVersion: 'v1',
+            state: 'unknown_unavailable',
+            customerNotice: 'This gallery link is unavailable.',
+            assets: []
+          });
+          setAutoPollStopped(true);
+        }
+      } catch {
+        setGallery({
+          apiVersion: 'v1',
+          state: 'temporarily_unavailable',
+          customerNotice: 'Gallery service is temporarily unavailable. Please try again.',
+          assets: []
+        });
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
+  // Initial fetch on token arrival
   useEffect(() => {
-    if (gallery.state !== 'registered_pending' || autoPollStopped) {
+    if (token) {
+      void fetchGalleryStatus(token, 0);
+    }
+  }, [token, fetchGalleryStatus]);
+
+  // Bounded polling for pending state
+  useEffect(() => {
+    if (!token || gallery.state !== 'registered_pending' || autoPollStopped) {
       return;
     }
 
@@ -47,11 +93,15 @@ export default function CustomerGalleryPage({
       if (typeof document !== 'undefined' && document.hidden) {
         return; // Pause polling when page is hidden (Section 10.1)
       }
-      setElapsedSeconds((prev) => prev + Math.round(intervalMs / 1000));
+      setElapsedSeconds((prev) => {
+        const next = prev + Math.round(intervalMs / 1000);
+        void fetchGalleryStatus(token, next);
+        return next;
+      });
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [gallery.state, elapsedSeconds, autoPollStopped]);
+  }, [token, gallery.state, elapsedSeconds, autoPollStopped, fetchGalleryStatus]);
 
   return (
     <main style={{ maxWidth: '760px', margin: '0 auto', padding: '28px 18px' }}>
@@ -62,7 +112,9 @@ export default function CustomerGalleryPage({
           marginBottom: '24px'
         }}
       >
-        <h1 style={{ margin: 0, fontSize: '20px' }}>ODC-PhotoStudio Digital Gallery</h1>
+        <h1 style={{ margin: 0, fontSize: '20px' }}>
+          {gallery.eventDisplayName ? `${gallery.eventDisplayName} — ` : ''}ODC-PhotoStudio Digital Gallery
+        </h1>
         <p style={{ margin: '8px 0 0 0', fontSize: '13px', color: '#A1A1AA' }}>
           {gallery.customerNotice}
         </p>
@@ -88,7 +140,7 @@ export default function CustomerGalleryPage({
         </section>
       )}
 
-      {gallery.state === 'registered_pending' && (
+      {gallery.state === 'temporarily_unavailable' && (
         <section
           role="status"
           style={{
@@ -100,6 +152,42 @@ export default function CustomerGalleryPage({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 600 }}>
             <RefreshCw size={18} />
+            <span>Temporarily Unavailable</span>
+          </div>
+          <p style={{ fontSize: '14px', color: '#A1A1AA', marginTop: '10px' }}>
+            {gallery.customerNotice}
+          </p>
+          <button
+            type="button"
+            onClick={() => void fetchGalleryStatus(token, elapsedSeconds)}
+            style={{
+              marginTop: '12px',
+              backgroundColor: '#FAFAFA',
+              color: '#09090B',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '10px 16px',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            Retry Now
+          </button>
+        </section>
+      )}
+
+      {gallery.state === 'registered_pending' && (
+        <section
+          role="status"
+          style={{
+            backgroundColor: '#18181B',
+            border: '1px solid #27272A',
+            borderRadius: '8px',
+            padding: '24px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 600 }}>
+            <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
             <span>Syncing Approved Session Media</span>
           </div>
           <p style={{ fontSize: '14px', color: '#A1A1AA', marginTop: '10px' }}>
@@ -111,6 +199,7 @@ export default function CustomerGalleryPage({
               onClick={() => {
                 setElapsedSeconds(0);
                 setAutoPollStopped(false);
+                void fetchGalleryStatus(token, 0);
               }}
               style={{
                 marginTop: '12px',
@@ -170,50 +259,53 @@ export default function CustomerGalleryPage({
             </span>
           </div>
 
-          {gallery.assets.map((asset) => (
-            <div
-              key={asset.assetId}
-              style={{
-                backgroundColor: '#18181B',
-                border: '1px solid #27272A',
-                borderRadius: '8px',
-                padding: '16px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 600 }}>
-                  {asset.kind === 'composite'
-                    ? 'Final Print Composite'
-                    : `Approved Photo #${(asset.shotIndex ?? 0) + 1}`}
-                </div>
-                <div style={{ fontSize: '12px', color: '#A1A1AA' }}>
-                  {asset.width}x{asset.height} px (sRGB JPEG, EXIF stripped)
-                </div>
-              </div>
-              <a
-                href={asset.downloadEndpoint}
-                rel="noreferrer"
+          {gallery.assets.map((asset) => {
+            const downloadUrl = `/api/v1/gallery/${encodeURIComponent(token)}/download?assetId=${asset.assetId}`;
+            return (
+              <div
+                key={asset.assetId}
                 style={{
-                  backgroundColor: '#FAFAFA',
-                  color: '#09090B',
-                  textDecoration: 'none',
-                  padding: '10px 16px',
-                  borderRadius: '6px',
-                  fontWeight: 600,
-                  fontSize: '13px',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px'
+                  backgroundColor: '#18181B',
+                  border: '1px solid #27272A',
+                  borderRadius: '8px',
+                  padding: '16px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
                 }}
               >
-                <Download size={15} />
-                Download
-              </a>
-            </div>
-          ))}
+                <div>
+                  <div style={{ fontWeight: 600 }}>
+                    {asset.kind === 'composite'
+                      ? 'Final Print Composite'
+                      : `Approved Photo #${(asset.shotIndex ?? 0) + 1}`}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#A1A1AA', marginTop: '4px' }}>
+                    {asset.width}x{asset.height} px (sRGB JPEG, EXIF stripped)
+                  </div>
+                </div>
+                <a
+                  href={downloadUrl}
+                  rel="noreferrer"
+                  style={{
+                    backgroundColor: '#FAFAFA',
+                    color: '#09090B',
+                    textDecoration: 'none',
+                    padding: '10px 16px',
+                    borderRadius: '6px',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Download size={15} />
+                  Download
+                </a>
+              </div>
+            );
+          })}
         </section>
       )}
 

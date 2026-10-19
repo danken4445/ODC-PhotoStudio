@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "odc-web-portal",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "triggers": {
+    "crons": [
+      // Scheduled deletion sweep runs every 5 minutes to enforce 24-hour gallery deletion SLA
+      "*/5 * * * *"
+    ]
+  }
+  // Production Secrets Documentation:
+  // Secrets must be set in Cloudflare dashboard or via `wrangler secret put <KEY>`:
+  // - SUPABASE_SERVICE_ROLE_KEY: Supabase backend service-role key for server routes and DB access
+  // - OFFLINE_GRANT_PRIVATE_KEY_PEM: Ed25519 PKCS#8 PEM private key for signing station offline event grants
+  // - TOKEN_PEPPER_SECRET: HMAC/SHA-256 server secret pepper for customer gallery token hashing
+  // - CRON_WORKER_SECRET: Bearer authorization secret for authenticating Cloudflare Cron deletion sweeps
+}

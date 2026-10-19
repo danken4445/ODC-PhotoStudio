@@ -12,13 +12,21 @@ import {
   type PrintProfile,
   type SignedOfflineGrant,
   type TemplateDefinition,
-  type TenantRole
+  type TenantRole,
+  type PlanTier,
+  getPlanDefinition,
+  TENANT_SUSPENDED,
+  PLAN_LIMIT_EXCEEDED
 } from '@odc-photostudio/contracts';
 
 export interface CloudTenantRecord {
   id: string;
   name: string;
   slug: string;
+  plan?: PlanTier;
+  status?: 'active' | 'suspended' | 'closed';
+  features?: Record<string, any>;
+  limits?: Record<string, any>;
 }
 
 export interface CloudMembershipRecord {
@@ -176,6 +184,30 @@ export class CloudPortalService {
   }
 
   public registerEvent(event: CloudEventRecord): void {
+    const tenant = this.tenants.get(event.tenantId);
+    if (tenant?.status === 'suspended') {
+      throw new Error(TENANT_SUSPENDED);
+    }
+    if (tenant && tenant.plan !== undefined) {
+      const planTier = tenant.plan;
+      const planDef = getPlanDefinition(planTier);
+      const activeEventLimit = tenant.limits?.maxActiveEvents !== undefined
+        ? tenant.limits.maxActiveEvents
+        : planDef.maxActiveEvents;
+
+      if (activeEventLimit !== null && activeEventLimit !== undefined) {
+        let activeCount = 0;
+        for (const ev of this.events.values()) {
+          if (ev.tenantId === event.tenantId && ev.status === 'active' && ev.id !== event.id) {
+            activeCount += 1;
+          }
+        }
+        if (activeCount >= activeEventLimit) {
+          throw new Error(`${PLAN_LIMIT_EXCEEDED}: Maximum active events limit reached for tenant plan`);
+        }
+      }
+    }
+
     for (const tplId of event.templateVersionIds) {
       const tpl = this.templateVersions.get(tplId);
       if (!tpl || tpl.tenantId !== event.tenantId) {
@@ -249,6 +281,11 @@ export class CloudPortalService {
     nowIso?: string;
     grantDurationHours?: number;
   }): SignedOfflineGrant {
+    const tenant = this.tenants.get(params.tenantId);
+    if (tenant?.status === 'suspended') {
+      throw new Error(TENANT_SUSPENDED);
+    }
+
     const auth = this.verifyActorAuthorization({
       actorUserId: params.actorUserId,
       tenantId: params.tenantId,
@@ -271,6 +308,18 @@ export class CloudPortalService {
       Date.parse(issuedAt) + durationHours * 60 * 60 * 1000
     ).toISOString();
 
+    const planTier = tenant?.plan;
+    const planDef = planTier ? getPlanDefinition(planTier) : null;
+    const maxTransactionsPerDay = tenant?.limits?.maxTransactionsPerDay !== undefined
+      ? tenant.limits.maxTransactionsPerDay
+      : planDef?.maxTransactionsPerDay;
+    const softCopyQr = tenant?.features?.softCopyQr !== undefined
+      ? Boolean(tenant.features.softCopyQr)
+      : planDef?.softCopyQr;
+    const maxCustomLayouts = tenant?.limits?.maxCustomLayouts !== undefined
+      ? tenant.limits.maxCustomLayouts
+      : planDef?.maxCustomLayouts;
+
     return signOfflineGrant(
       {
         grantId: crypto.randomUUID(),
@@ -283,7 +332,11 @@ export class CloudPortalService {
         permittedPrintProfileIds: params.permittedPrintProfiles.map((p) => p.id),
         galleryOrigin: params.galleryOrigin,
         issuedAt,
-        expiresAt
+        expiresAt,
+        plan: planTier,
+        maxTransactionsPerDay,
+        softCopyQr,
+        maxCustomLayouts
       },
       this.grantPrivateKeyPem
     );
@@ -306,6 +359,49 @@ export class CloudPortalService {
     }
 
     const { manifest } = params;
+    const tenant = this.tenants.get(manifest.tenantId);
+    if (tenant?.status === 'suspended') {
+      return {
+        status: 'forbidden_revoked',
+        errorCode: TENANT_SUSPENDED
+      };
+    }
+
+    if (tenant && tenant.plan !== undefined) {
+      const planTier = tenant.plan;
+      const planDef = getPlanDefinition(planTier);
+      const softCopyAllowed = tenant.features?.softCopyQr !== undefined
+        ? Boolean(tenant.features.softCopyQr)
+        : planDef.softCopyQr;
+
+      if (!softCopyAllowed) {
+        return {
+          status: 'forbidden_revoked',
+          errorCode: `${PLAN_LIMIT_EXCEEDED}: Basic plan does not support customer soft-copy gallery`
+        };
+      }
+
+      const maxStorageMb = tenant.limits?.maxStorageMb !== undefined
+        ? tenant.limits.maxStorageMb
+        : planDef.maxStorageMb;
+
+      if (maxStorageMb !== null && maxStorageMb !== undefined) {
+        let currentStorageBytes = 0;
+        for (const obj of this.privateStorageObjects.values()) {
+          if (obj.tenantId === manifest.tenantId) {
+            currentStorageBytes += obj.byteSize;
+          }
+        }
+        const incomingBytes = manifest.assets.reduce((sum, a) => sum + (a.byteSize || 0), 0);
+        if ((currentStorageBytes + incomingBytes) / (1024 * 1024) > maxStorageMb) {
+          return {
+            status: 'forbidden_revoked',
+            errorCode: `${PLAN_LIMIT_EXCEEDED}: Storage quota exceeded for tenant plan`
+          };
+        }
+      }
+    }
+
     // Recheck live membership and station/event authorization on reconnect (Section 10.2 / A09)
     const auth = this.verifyActorAuthorization({
       actorUserId: params.actorUserId,
