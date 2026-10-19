@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST as loginHandler } from '../src/app/api/odc/auth/login/route';
 import { POST as logoutHandler } from '../src/app/api/odc/auth/logout/route';
@@ -50,10 +50,12 @@ describe('Stream E: ODC Super-Admin Web Portal & Client Onboarding (§1, §2, §
     });
 
     it('authenticates platform admin and issues cookie', async () => {
+      const devPassword = `test-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+      vi.stubEnv('ODC_DEV_ADMIN_PASSWORD', devPassword);
       const req = new NextRequest('http://localhost:3000/api/odc/auth/login', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: 'superadmin@odc.ph', password: 'SuperSecret2026!' })
+        body: JSON.stringify({ email: 'superadmin@odc.ph', password: devPassword })
       });
       const res = await loginHandler(req);
       expect(res.status).toBe(200);
@@ -63,6 +65,7 @@ describe('Stream E: ODC Super-Admin Web Portal & Client Onboarding (§1, §2, §
 
       const cookie = res.cookies.get('odc_admin_token');
       expect(cookie).toBeDefined();
+      vi.unstubAllEnvs();
     });
 
     it('logout clears odc_admin_token cookie', async () => {

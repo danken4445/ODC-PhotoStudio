@@ -61,9 +61,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // Dev/Test fallback for superadmin
     if (!userId) {
+      const devFallbackEnabled =
+        (process.env.NODE_ENV !== 'production' || process.env.VITEST === 'true') &&
+        !!process.env.ODC_DEV_ADMIN_PASSWORD;
       const isTestAdmin =
+        devFallbackEnabled &&
         (email === 'admin@odc.local' || email === 'superadmin@odc.ph') &&
-        (password === 'SuperSecret2026!' || password.length >= 8);
+        password === process.env.ODC_DEV_ADMIN_PASSWORD;
 
       if (isTestAdmin) {
         userId = '00000000-0000-0000-0000-000000000001';
