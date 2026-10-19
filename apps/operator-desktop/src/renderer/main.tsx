@@ -1,12 +1,17 @@
-import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { OperatorCaptureApp } from './App.js';
 
 const rootEl = document.getElementById('root');
 if (rootEl) {
-  createRoot(rootEl).render(
-    <React.StrictMode>
-      <OperatorCaptureApp />
-    </React.StrictMode>
-  );
+  const isCustomerSurface = new URLSearchParams(window.location.search).get('surface') === 'customer';
+  const root = createRoot(rootEl);
+  if (isCustomerSurface) {
+    document.title = 'ODC Photo Booth';
+    void import('./customer-display/CustomerDisplayApp.js').then(({ CustomerDisplayApp }) => {
+      root.render(<CustomerDisplayApp />);
+    });
+  } else {
+    void import('./App.js').then(({ OperatorCaptureApp }) => {
+      root.render(<OperatorCaptureApp />);
+    });
+  }
 }

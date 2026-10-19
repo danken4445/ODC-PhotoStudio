@@ -5,7 +5,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['packages/**/*.test.ts', 'apps/**/*.test.ts', 'supabase/tests/**/*.test.ts'],
+    include: [
+      'packages/**/*.test.{ts,tsx}',
+      'apps/**/*.test.{ts,tsx}',
+      'supabase/tests/**/*.test.{ts,tsx}'
+    ],
     testTimeout: 30000
   },
   resolve: {
