@@ -53,7 +53,11 @@ export const OfflineGrantPayloadSchema = z.object({
   permittedPrintProfileIds: z.array(z.string().min(1)).min(1),
   galleryOrigin: z.string().url(),
   issuedAt: z.string().datetime(),
-  expiresAt: z.string().datetime()
+  expiresAt: z.string().datetime(),
+  plan: z.enum(['basic', 'plus', 'business']).optional(),
+  maxTransactionsPerDay: z.number().int().positive().nullable().optional(),
+  softCopyQr: z.boolean().optional(),
+  maxCustomLayouts: z.number().int().nonnegative().optional()
 });
 export type OfflineGrantPayload = z.infer<typeof OfflineGrantPayloadSchema>;
 
@@ -89,7 +93,11 @@ export function canonicalizeGrantPayload(payload: OfflineGrantPayload): string {
     permittedPrintProfileIds: [...validated.permittedPrintProfileIds].sort(),
     galleryOrigin: validated.galleryOrigin,
     issuedAt: validated.issuedAt,
-    expiresAt: validated.expiresAt
+    expiresAt: validated.expiresAt,
+    plan: validated.plan ?? null,
+    maxTransactionsPerDay: validated.maxTransactionsPerDay ?? null,
+    softCopyQr: validated.softCopyQr ?? null,
+    maxCustomLayouts: validated.maxCustomLayouts ?? null
   });
 }
 
