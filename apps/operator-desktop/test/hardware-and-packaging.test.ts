@@ -433,5 +433,43 @@ describe('Hardware Adapters & Packaging Qualification (Phase 5 & 6)', () => {
       expect(ciYaml).toContain('pnpm build');
       expect(ciYaml).toContain('electron-builder.json');
     });
+
+    it('wires a Private-profile-only firewall rule for the BYOD display into the NSIS installer', () => {
+      const config = JSON.parse(
+        fs.readFileSync(path.resolve(__dirname, '../electron-builder.json'), 'utf8')
+      );
+      expect(config.nsis.include).toBe('build/installer.nsh');
+
+      const nsh = fs.readFileSync(path.resolve(__dirname, '../build/installer.nsh'), 'utf8');
+      const ruleName = 'ODC-PhotoStudio BYOD Display (Private)';
+      expect(nsh).toContain('!macro customInstall');
+      expect(nsh).toContain('!macro customUnInstall');
+      expect(nsh).toContain(`delete rule name="${ruleName}"`);
+      expect(nsh).toContain(`add rule name="${ruleName}"`);
+      expect(nsh).toContain('dir=in action=allow protocol=TCP localport=47940');
+      expect(nsh).toContain('profile=private');
+      expect(nsh).toContain('program="$INSTDIR\\${APP_EXECUTABLE_FILENAME}"');
+      expect(nsh).not.toMatch(/profile=(public|any|domain)/i);
+      expect(nsh).not.toMatch(/profile=.*(public|any)/i);
+      // install replaces any prior rule first, so upgrades never leave duplicates
+      expect(nsh.indexOf('delete rule')).toBeLessThan(nsh.indexOf('add rule'));
+    });
+
+    it('never mutates the firewall automatically from application code', () => {
+      const mainDir = path.resolve(__dirname, '../src');
+      const sources: string[] = [];
+      const walk = (dir: string) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) walk(full);
+          else if (/\.(ts|tsx)$/.test(entry.name)) sources.push(fs.readFileSync(full, 'utf8'));
+        }
+      };
+      walk(mainDir);
+      for (const source of sources) {
+        expect(source).not.toMatch(/netsh|advfirewall|New-NetFirewallRule/i);
+      }
+    });
   });
 });
+

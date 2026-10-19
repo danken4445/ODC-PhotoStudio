@@ -42,3 +42,7 @@ pnpm test
 ```powershell
 pnpm typecheck
 ```
+
+## Customer Display (optional, off by default)
+
+The operator console can mirror the live camera view and countdown to a wired second monitor and/or an offline BYOD tablet. It is disabled by default and never blocks capture, approval, printing or sync. Setup, the Private-profile firewall rule, recovery and rollback are in [docs/hardware-and-operations-runbook.md](docs/hardware-and-operations-runbook.md#5-customer-display-wired-monitor-and-byod-tablet); record physical results with [docs/customer-display-qualification-template.md](docs/customer-display-qualification-template.md). Hardware is `UNVERIFIED` until a qualification record says otherwise.

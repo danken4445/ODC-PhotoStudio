@@ -61,3 +61,41 @@
 ### 4.5 Authentication Expiry or Operator Revocation While Offline (Scenarios A08 & A09)
 - **Symptom**: Sync drawer shows `blocked_auth`.
 - **Operator Action**: Reauthenticate with an active operator or admin account assigned to the event, then trigger `resumeAuthBlockedJobs()`.
+
+## 5. Customer Display (Wired Monitor and BYOD Tablet)
+
+The customer display is **off by default**. Capture, approval, printing and sync never depend on it. If any display problem affects those flows, set the mode to `off` and treat it as a release blocker.
+
+> [!WARNING]
+> No physical hardware row is certified until its qualification record (`docs/customer-display-qualification-template.md`) is marked PASS. Until then every hardware combination is `UNVERIFIED`.
+
+### 5.1 Wired monitor setup
+1. Connect the monitor (HDMI, or native USB-C DisplayPort) and set Windows to **Extend these displays** (Win+P). Do not use Duplicate.
+2. In the operator console open **Display settings**, press **Identify** to flash a number on each screen, then select the customer monitor.
+3. Choose mode `wired`. A borderless kiosk window opens on that monitor. Selection uses a stable monitor fingerprint, never the volatile Electron display ID.
+4. If two identical monitors are attached the status shows **ambiguous** and no window opens; unplug one or choose again after identifying.
+
+### 5.2 BYOD tablet setup (offline)
+1. Use a dedicated router with no internet requirement, isolated from venue/guest Wi-Fi. **Never use venue or public Wi-Fi.** The server binds only to a private IPv4 address (10.x, 172.16-31.x, 192.168.x).
+2. Choose the station's private network interface in Display settings and set mode `tablet` (or `both`).
+3. Scan the on-screen QR code with the tablet. The pairing link is single-use and short-lived; after pairing the QR is hidden. Only one tablet can be paired at a time.
+4. iPad: open the page, **Share → Add to Home Screen**, launch it from the Home Screen icon, then enable **Guided Access** (Settings → Accessibility).
+5. Android: open in Chrome, use **Add to Home screen**, and enable **screen pinning** (App pinning).
+6. Reset pairing at any time from Display settings; the old tablet is disconnected immediately.
+
+### 5.3 Firewall
+The installer adds one inbound rule named `ODC-PhotoStudio BYOD Display (Private)` (installed executable, TCP `47940`, **Private profile only**) and removes it on uninstall; upgrades replace it. The application never changes firewall settings itself. If the installer was not elevated, the default port is changed, or you run a development build, add the rule manually from an elevated PowerShell:
+
+```powershell
+netsh advfirewall firewall add rule name="ODC-PhotoStudio BYOD Display (Private)" dir=in action=allow protocol=TCP localport=47940 profile=private program="<full path to the executable>"
+netsh advfirewall firewall delete rule name="ODC-PhotoStudio BYOD Display (Private)"
+```
+For a non-default port substitute it for `47940` in the first command. Ensure the router network is classified as **Private** in Windows.
+
+### 5.4 Disconnect recovery
+- **Cable removed / monitor missing**: status shows `missing`. Capture continues. Reconnect the cable; the kiosk window reopens automatically.
+- **Tablet sleeps or Wi-Fi drops**: status shows `reconnecting`; the tablet reconnects on its own. If it does not, reset pairing and re-scan the QR.
+- **Camera failure**: the customer screen shows a "one moment" message; follow section 4.1. Captured shots are preserved.
+
+### 5.5 Rollback
+Set the display mode to `off`. The kiosk window and tablet server close, pairing is invalidated, preview images are cleared, and live view stops after a 5-second grace period. No cloud or schema rollback is needed.
