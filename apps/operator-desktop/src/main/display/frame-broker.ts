@@ -231,7 +231,12 @@ export class LatestFrameBroker {
   private offerFrame(state: SinkState, frame: CustomerDisplayFrame): void {
     state.pendingFrameSequence = frame.meta.sequence;
     if (state.queuedLiveSequence === frame.meta.sequence) state.queuedLiveSequence = null;
-    state.sink.offerFrame(frame);
+    const accepted = state.sink.offerFrame(frame);
+    if (!accepted && frame.meta.kind === 'live') {
+      state.pendingFrameSequence = null;
+      this.framesDropped += 1;
+      return;
+    }
     if (frame.meta.kind === 'preview') this.armFrameTimeout(state);
   }
 

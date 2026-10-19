@@ -250,6 +250,7 @@ describe('CustomerDisplayApp', () => {
 describe('customer transport selection', () => {
   afterEach(() => {
     delete window.odcDisplayBridge;
+    vi.unstubAllGlobals();
   });
 
   it('uses only the narrow display bridge when Electron provides it', async () => {
@@ -270,6 +271,42 @@ describe('customer transport selection', () => {
     await expect(transport.getSnapshot()).resolves.toEqual(initial);
     expect(window.odcOperatorBridge).toBeUndefined();
     transport.close();
+  });
+
+  it('uses the pinned versioned WebSocket protocol for BYOD snapshots and acknowledgements', async () => {
+    const listeners = new Map<string, (event: { data: unknown }) => void>();
+    const sent: string[] = [];
+    class FakeWebSocket {
+      static readonly OPEN = 1;
+      readonly OPEN = 1;
+      readyState = 1;
+      binaryType = '';
+      addEventListener(event: string, listener: (event: { data: unknown }) => void) {
+        listeners.set(event, listener);
+      }
+      send(value: string) {
+        sent.push(value);
+      }
+      close() {}
+    }
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    delete window.odcDisplayBridge;
+    const transport = createCustomerDisplayTransport({
+      protocol: 'http:',
+      host: '127.0.0.1:47940'
+    } as Location);
+    const pending = transport.getSnapshot();
+    listeners.get('message')?.({
+      data: JSON.stringify({ v: 1, type: 'snapshot', payload: snapshot('live') })
+    });
+    await expect(pending).resolves.toEqual(snapshot('live'));
+
+    transport.ackSnapshot(4);
+    transport.ackFrame(9);
+    expect(sent.map((value) => JSON.parse(value))).toEqual([
+      { v: 1, type: 'ack_snapshot', revision: 4 },
+      { v: 1, type: 'ack_frame', sequence: 9 }
+    ]);
   });
 });
 

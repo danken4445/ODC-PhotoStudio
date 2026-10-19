@@ -102,6 +102,30 @@ describe('LatestFrameBroker', () => {
     expect(broker.getMetrics().framesDropped).toBe(1);
   });
 
+  it('drops a backpressured live frame without blocking the next live frame', () => {
+    const broker = new LatestFrameBroker();
+    const offered: number[] = [];
+    let backpressured = true;
+    broker.addSink({
+      id: 'slow-tablet',
+      offerSnapshot: () => true,
+      offerFrame: (frame) => {
+        offered.push(frame.meta.sequence);
+        if (backpressured) {
+          backpressured = false;
+          return false;
+        }
+        return true;
+      },
+      disconnect: vi.fn()
+    });
+
+    broker.publishLive(Uint8Array.of(1), Date.now());
+    broker.publishLive(Uint8Array.of(2), Date.now() + 1);
+    expect(offered).toEqual([1, 2]);
+    expect(broker.getMetrics().framesDropped).toBe(1);
+  });
+
   it('prioritizes preview and resumes only with a post-preview live frame', () => {
     const broker = new LatestFrameBroker();
     const receiver = createSink();

@@ -112,11 +112,11 @@ class WebSocketCustomerDisplayTransport implements CustomerDisplayTransport {
   }
 
   ackSnapshot(revision: number): void {
-    this.send({ type: 'ack-snapshot', revision });
+    this.send({ v: 1, type: 'ack_snapshot', revision });
   }
 
   ackFrame(sequence: number): void {
-    this.send({ type: 'ack-frame', sequence });
+    this.send({ v: 1, type: 'ack_frame', sequence });
   }
 
   close(): void {
@@ -134,9 +134,9 @@ class WebSocketCustomerDisplayTransport implements CustomerDisplayTransport {
         return;
       }
       if (!value || typeof value !== 'object' || !('type' in value)) return;
-      const envelope = value as { type: unknown; snapshot?: unknown };
-      if (envelope.type !== 'snapshot') return;
-      const parsed = CustomerDisplaySnapshotSchema.safeParse(envelope.snapshot);
+      const envelope = value as { v?: unknown; type: unknown; payload?: unknown };
+      if (envelope.v !== 1 || envelope.type !== 'snapshot') return;
+      const parsed = CustomerDisplaySnapshotSchema.safeParse(envelope.payload);
       if (!parsed.success) return;
       this.latestSnapshot = parsed.data;
       this.resolveInitial?.(parsed.data);
