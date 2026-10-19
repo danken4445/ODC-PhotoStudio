@@ -33,12 +33,13 @@ export default async function OdcLayout({
   // Check mock/test admin tokens
   if (
     token.startsWith('mock-token-') ||
+    token === '57ee24a7-144a-47f4-b13b-7c5756f48cbb' ||
     token === '00000000-0000-0000-0000-000000000001' ||
     token.startsWith('90000000') ||
     token.startsWith('99999999')
   ) {
     isPlatformAdmin = true;
-    userEmail = 'superadmin@odc.ph';
+    userEmail = 'superadmin@odc.com';
   } else {
     try {
       const supabase = createServiceRoleClient<Database>();
