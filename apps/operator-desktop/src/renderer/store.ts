@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import type {
   CaptureState,
   CompositeState,
+  DisplayMode,
+  DisplayOverview,
   PrintAttemptState,
   UploadState
 } from '@odc-photostudio/contracts';
@@ -68,6 +70,9 @@ export interface OperatorUiState {
   serverUrl: string;
   isEnrolling: boolean;
   enrollmentError: string | null;
+  displayOverview: DisplayOverview | null;
+  displayError: string | null;
+  isDisplaySettingsOpen: boolean;
 
   selectTemplateIndex: (index: number) => void;
   triggerCaptureOrRetake: (frameIndex?: number) => void | Promise<void>;
@@ -81,6 +86,20 @@ export interface OperatorUiState {
   triggerSyncNow: () => Promise<void>;
   loadInitialState: () => Promise<void>;
   enrollStation: (code: string, serverUrl?: string) => Promise<boolean>;
+  refreshDisplayOverview: () => Promise<void>;
+  setDisplayMode: (mode: DisplayMode) => Promise<void>;
+  identifyDisplay: (fingerprint: string) => Promise<void>;
+  openWiredDisplay: (fingerprint: string) => Promise<void>;
+  closeWiredDisplay: () => Promise<void>;
+  startTabletDisplay: (host: string, port: number) => Promise<void>;
+  stopTabletDisplay: () => Promise<void>;
+  resetTabletPairing: () => Promise<void>;
+  subscribeDisplayStatus: () => () => void;
+  setDisplaySettingsOpen: (open: boolean) => void;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Customer display operation failed';
 }
 
 export const useOperatorStore = create<OperatorUiState>((set, get) => ({
@@ -144,6 +163,9 @@ export const useOperatorStore = create<OperatorUiState>((set, get) => ({
   serverUrl: 'http://localhost:3000',
   isEnrolling: false,
   enrollmentError: null,
+  displayOverview: null,
+  displayError: null,
+  isDisplaySettingsOpen: false,
 
   loadInitialState: async () => {
     if (typeof window !== 'undefined' && window.odcOperatorBridge) {
@@ -179,6 +201,7 @@ export const useOperatorStore = create<OperatorUiState>((set, get) => ({
         // Preflight query failed or event not yet prepared; keep defaults
       }
       await get().refreshSyncQueue();
+      await get().refreshDisplayOverview();
     }
   },
 
@@ -449,8 +472,15 @@ export const useOperatorStore = create<OperatorUiState>((set, get) => ({
    * Before the next session, reset visible customer photos while retaining
    * required background sync work in the drawer (Section 14).
    */
-  startNextSession: () => {
+  startNextSession: async () => {
     const state = get();
+    if (typeof window !== 'undefined' && window.odcOperatorBridge?.resetCustomerSession) {
+      try {
+        await window.odcOperatorBridge.resetCustomerSession();
+      } catch (error) {
+        set({ displayError: errorMessage(error) });
+      }
+    }
     const tpl = state.availableTemplates[state.selectedTemplateIndex];
     const requiredShots = tpl?.requiredShots ?? 4;
     set({
@@ -501,6 +531,105 @@ export const useOperatorStore = create<OperatorUiState>((set, get) => ({
 
   setReprintModalOpen: (open: boolean) => set({ isReprintModalOpen: open }),
   setSyncDrawerOpen: (open: boolean) => set({ isSyncDrawerOpen: open }),
+  setDisplaySettingsOpen: (open: boolean) => set({ isDisplaySettingsOpen: open }),
+
+  refreshDisplayOverview: async () => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.getDisplayOverview) return;
+    try {
+      const displayOverview = await window.odcOperatorBridge.getDisplayOverview();
+      set({ displayOverview, displayError: null });
+    } catch (error) {
+      set({ displayError: errorMessage(error) });
+    }
+  },
+
+  setDisplayMode: async (mode: DisplayMode) => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.saveDisplaySettings) return;
+    let displayOverview = get().displayOverview;
+    if (!displayOverview) {
+      await get().refreshDisplayOverview();
+      displayOverview = get().displayOverview;
+    }
+    if (!displayOverview) return;
+    try {
+      const updated = await window.odcOperatorBridge.saveDisplaySettings({
+        ...displayOverview.settings,
+        mode
+      });
+      set({ displayOverview: updated, displayError: null });
+    } catch (error) {
+      set({ displayError: errorMessage(error) });
+    }
+  },
+
+  identifyDisplay: async (fingerprint: string) => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.identifyDisplay) return;
+    try {
+      await window.odcOperatorBridge.identifyDisplay({ fingerprint });
+      set({ displayError: null });
+    } catch (error) {
+      set({ displayError: errorMessage(error) });
+    }
+  },
+
+  openWiredDisplay: async (fingerprint: string) => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.openWiredDisplay) return;
+    try {
+      const displayOverview = await window.odcOperatorBridge.openWiredDisplay({ fingerprint });
+      set({ displayOverview, displayError: null });
+    } catch (error) {
+      set({ displayError: errorMessage(error) });
+    }
+  },
+
+  closeWiredDisplay: async () => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.closeWiredDisplay) return;
+    try {
+      const displayOverview = await window.odcOperatorBridge.closeWiredDisplay();
+      set({ displayOverview, displayError: null });
+    } catch (error) {
+      set({ displayError: errorMessage(error) });
+    }
+  },
+
+  startTabletDisplay: async (host: string, port: number) => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.startTabletDisplay) return;
+    try {
+      const displayOverview = await window.odcOperatorBridge.startTabletDisplay({ host, port });
+      set({ displayOverview, displayError: null });
+    } catch (error) {
+      set({ displayError: errorMessage(error) });
+    }
+  },
+
+  stopTabletDisplay: async () => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.stopTabletDisplay) return;
+    try {
+      const displayOverview = await window.odcOperatorBridge.stopTabletDisplay();
+      set({ displayOverview, displayError: null });
+    } catch (error) {
+      set({ displayError: errorMessage(error) });
+    }
+  },
+
+  resetTabletPairing: async () => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.resetTabletPairing) return;
+    try {
+      const displayOverview = await window.odcOperatorBridge.resetTabletPairing();
+      set({ displayOverview, displayError: null });
+    } catch (error) {
+      set({ displayError: errorMessage(error) });
+    }
+  },
+
+  subscribeDisplayStatus: () => {
+    if (typeof window === 'undefined' || !window.odcOperatorBridge?.onDisplayStatus) {
+      return () => undefined;
+    }
+    return window.odcOperatorBridge.onDisplayStatus((displayOverview) => {
+      set({ displayOverview, displayError: null });
+    });
+  },
 
   enrollStation: async (code: string, serverUrl?: string): Promise<boolean> => {
     const targetUrl = serverUrl || get().serverUrl || 'http://localhost:3000';

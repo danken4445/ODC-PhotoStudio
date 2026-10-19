@@ -2,6 +2,26 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { ApprovedSessionManifest } from '@odc-photostudio/contracts';
 import { HttpCloudSyncTransport } from '../src/main/queue/http-transport.js';
 
+const electronIpc = vi.hoisted(() => ({
+  handlers: new Map<string, (...args: any[]) => any>(),
+  listeners: new Map<string, (...args: any[]) => any>(),
+  removeHandler: vi.fn((channel: string) => electronIpc.handlers.delete(channel)),
+  handle: vi.fn((channel: string, listener: (...args: any[]) => any) =>
+    electronIpc.handlers.set(channel, listener)
+  ),
+  removeAllListeners: vi.fn((channel: string) => electronIpc.listeners.delete(channel)),
+  on: vi.fn((channel: string, listener: (...args: any[]) => any) =>
+    electronIpc.listeners.set(channel, listener)
+  )
+}));
+
+vi.mock('electron', () => ({
+  app: null,
+  BrowserWindow: class {},
+  session: undefined,
+  ipcMain: electronIpc
+}));
+
 describe('Phase 4: Operator Desktop End-to-End Wiring', () => {
   const sampleManifest: ApprovedSessionManifest = {
     manifestVersion: 1,
@@ -333,6 +353,167 @@ describe('Phase 4: Operator Desktop End-to-End Wiring', () => {
       store.approveSession();
       // Should not throw and should handle mock in-memory approval
       expect(useOperatorStore.getState().compositeState).toBeDefined();
+    });
+
+    it('routes display actions through the narrow bridge, unsubscribes status, and resets the customer surface', async () => {
+      const overview = {
+        settings: {
+          mode: 'off',
+          preferredWiredDisplay: null,
+          tabletBindAddress: null,
+          tabletPort: 47940,
+          mirroredLiveView: true
+        },
+        targets: [],
+        interfaces: [{ name: 'Wi-Fi', address: '192.168.1.20', internal: false }],
+        wired: { state: 'closed', selectedFingerprint: null, error: null },
+        tablet: {
+          state: 'stopped',
+          enabled: false,
+          host: null,
+          port: null,
+          pairingUrl: null,
+          pairingQrDataUrl: null,
+          lastHeartbeatAt: null,
+          error: null
+        },
+        metrics: {
+          framesPublished: 0,
+          framesDropped: 0,
+          framesPerSecond: 0,
+          lastFrameAgeMs: null
+        }
+      };
+      const unsubscribe = vi.fn();
+      const bridge = {
+        getDisplayOverview: vi.fn(async () => overview),
+        saveDisplaySettings: vi.fn(async () => overview),
+        identifyDisplay: vi.fn(async () => undefined),
+        openWiredDisplay: vi.fn(async () => overview),
+        closeWiredDisplay: vi.fn(async () => overview),
+        startTabletDisplay: vi.fn(async () => overview),
+        stopTabletDisplay: vi.fn(async () => overview),
+        resetTabletPairing: vi.fn(async () => overview),
+        resetCustomerSession: vi.fn(async () => undefined),
+        onDisplayStatus: vi.fn(() => unsubscribe)
+      };
+      (globalThis as any).window = { odcOperatorBridge: bridge };
+      const { useOperatorStore } = await import('../src/renderer/store.js');
+      useOperatorStore.setState({ captureState: 'approved', printState: 'submitted' });
+      const store = useOperatorStore.getState();
+
+      await store.refreshDisplayOverview();
+      await store.setDisplayMode('wired');
+      await store.identifyDisplay('fingerprint-1');
+      await store.openWiredDisplay('fingerprint-1');
+      await store.startTabletDisplay('192.168.1.20', 47940);
+      await store.resetTabletPairing();
+      await store.stopTabletDisplay();
+      await store.closeWiredDisplay();
+      const stopStatus = store.subscribeDisplayStatus();
+      stopStatus();
+      await store.startNextSession();
+
+      expect(bridge.saveDisplaySettings).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: 'wired' })
+      );
+      expect(bridge.identifyDisplay).toHaveBeenCalledWith({ fingerprint: 'fingerprint-1' });
+      expect(bridge.openWiredDisplay).toHaveBeenCalledWith({ fingerprint: 'fingerprint-1' });
+      expect(bridge.startTabletDisplay).toHaveBeenCalledWith({ host: '192.168.1.20', port: 47940 });
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      expect(bridge.resetCustomerSession).toHaveBeenCalledTimes(1);
+      delete (globalThis as any).window;
+    });
+
+    it('contains display failures without mutating capture or print state', async () => {
+      const bridge = {
+        saveDisplaySettings: vi.fn(async () => {
+          throw new Error('DISPLAY_FAILED');
+        })
+      };
+      (globalThis as any).window = { odcOperatorBridge: bridge };
+      const { useOperatorStore } = await import('../src/renderer/store.js');
+      useOperatorStore.setState({ captureState: 'reviewing', printState: 'submitted' });
+
+      await useOperatorStore.getState().setDisplayMode('tablet');
+      expect(useOperatorStore.getState()).toMatchObject({
+        captureState: 'reviewing',
+        printState: 'submitted',
+        displayError: 'DISPLAY_FAILED'
+      });
+      delete (globalThis as any).window;
+    });
+  });
+
+  describe('validated customer display IPC', () => {
+    it('validates requests, strips unknown secrets, and tears down status subscriptions', async () => {
+      const overview = {
+        settings: {
+          mode: 'off',
+          preferredWiredDisplay: null,
+          tabletBindAddress: null,
+          tabletPort: 47940,
+          mirroredLiveView: true
+        },
+        targets: [],
+        interfaces: [],
+        wired: { state: 'closed', selectedFingerprint: null, error: null },
+        tablet: {
+          state: 'stopped',
+          enabled: false,
+          host: null,
+          port: null,
+          pairingUrl: null,
+          pairingQrDataUrl: null,
+          lastHeartbeatAt: null,
+          error: null
+        },
+        metrics: {
+          framesPublished: 0,
+          framesDropped: 0,
+          framesPerSecond: 0,
+          lastFrameAgeMs: null
+        }
+      };
+      let statusListener: ((value: any) => void) | null = null;
+      const stopStatus = vi.fn();
+      const service = {
+        getOverview: vi.fn(async () => overview),
+        saveSettings: vi.fn(async () => overview),
+        identifyDisplay: vi.fn(async () => undefined),
+        openWiredDisplay: vi.fn(async () => overview),
+        closeWiredDisplay: vi.fn(async () => overview),
+        startTabletDisplay: vi.fn(async () => overview),
+        stopTabletDisplay: vi.fn(async () => overview),
+        resetTabletPairing: vi.fn(async () => overview),
+        resetCustomerSession: vi.fn(async () => undefined),
+        onStatus: vi.fn((listener: (value: any) => void) => {
+          statusListener = listener;
+          return stopStatus;
+        })
+      };
+      const { registerValidatedIpcHandlers } = await import('../src/main/index.js');
+      registerValidatedIpcHandlers({} as any, undefined, service);
+      const event = { sender: { id: 7, isDestroyed: () => false, send: vi.fn(), once: vi.fn() } };
+
+      await expect(
+        electronIpc.handlers.get('odc:display:start-tablet')!(event, {
+          host: '8.8.8.8',
+          port: 47940
+        })
+      ).rejects.toThrow('private IPv4');
+      await expect(
+        electronIpc.handlers.get('odc:display:identify')!(event, { fingerprint: '' })
+      ).rejects.toThrow();
+      await electronIpc.handlers.get('odc:display:save-settings')!(event, overview.settings);
+      expect(service.saveSettings).toHaveBeenCalledWith(overview.settings);
+
+      electronIpc.listeners.get('odc:display:status-subscribe')!(event);
+      statusListener?.({ ...overview, pairingSecret: 'must-not-cross-ipc' });
+      expect(event.sender.send).toHaveBeenCalledWith('odc:display:status', overview);
+      expect(JSON.stringify(event.sender.send.mock.calls)).not.toContain('must-not-cross-ipc');
+      electronIpc.listeners.get('odc:display:status-unsubscribe')!(event);
+      expect(stopStatus).toHaveBeenCalledTimes(1);
     });
   });
 });

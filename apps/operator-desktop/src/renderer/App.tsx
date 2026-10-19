@@ -8,6 +8,7 @@ import {
   HardDrive,
   KeyRound,
   LayoutGrid,
+  Monitor,
   Printer,
   RefreshCw,
   Server,
@@ -17,6 +18,7 @@ import {
   X
 } from 'lucide-react';
 import { useOperatorStore } from './store.js';
+import { DisplaySettingsPanel } from './display-settings/DisplaySettingsPanel.js';
 
 export function OperatorCaptureApp(): React.JSX.Element {
   const store = useOperatorStore();
@@ -26,6 +28,8 @@ export function OperatorCaptureApp(): React.JSX.Element {
   useEffect(() => {
     void store.loadInitialState();
   }, []);
+
+  useEffect(() => store.subscribeDisplayStatus(), []);
 
   useEffect(() => {
     if (store.serverUrl) {
@@ -354,6 +358,25 @@ export function OperatorCaptureApp(): React.JSX.Element {
             {store.networkOnline ? <Wifi size={15} /> : <WifiOff size={15} />}
             {store.networkOnline ? 'Network: Online' : 'Network: Offline (Local Mode)'}
           </span>
+          <button
+            type="button"
+            onClick={() => store.setDisplaySettingsOpen(!store.isDisplaySettingsOpen)}
+            aria-expanded={store.isDisplaySettingsOpen}
+            style={{
+              backgroundColor: '#27272A',
+              color: '#FAFAFA',
+              border: '1px solid #3F3F46',
+              borderRadius: '6px',
+              padding: '6px 12px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <Monitor size={15} />
+            Customer Display
+          </button>
           <button
             type="button"
             onClick={() => store.setSyncDrawerOpen(!store.isSyncDrawerOpen)}
@@ -723,6 +746,32 @@ export function OperatorCaptureApp(): React.JSX.Element {
           </button>
         </section>
       </main>
+
+      {store.isDisplaySettingsOpen && (
+        <aside
+          role="dialog"
+          aria-modal="true"
+          aria-label="Customer display settings"
+          style={{
+            position: 'fixed',
+            inset: '4vh 4vw',
+            zIndex: 60,
+            overflowY: 'auto',
+            padding: '24px',
+            border: '1px solid #3F3F46',
+            borderRadius: '10px',
+            backgroundColor: '#09090B',
+            boxShadow: '0 24px 80px rgba(0, 0, 0, 0.7)'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
+            <button type="button" onClick={() => store.setDisplaySettingsOpen(false)}>
+              Close display settings
+            </button>
+          </div>
+          <DisplaySettingsPanel />
+        </aside>
+      )}
 
       {/* Reprint Confirmation Modal (Shortcut P) */}
       {store.isReprintModalOpen && (

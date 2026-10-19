@@ -4,9 +4,15 @@ import { app, BrowserWindow, ipcMain, session as electronSession } from 'electro
 import { z } from 'zod';
 import {
   CreateSessionIpcRequestSchema,
+  DisplayFingerprintIpcRequestSchema,
+  DisplayOverviewSchema,
+  SaveDisplaySettingsIpcRequestSchema,
+  StartTabletDisplayIpcRequestSchema,
   ResolveUnknownPrintIpcRequestSchema,
   SubmitPrintIpcRequestSchema,
   TriggerCaptureIpcRequestSchema,
+  type DisplayOverview,
+  type DisplaySettings,
   type UploadState
 } from '@odc-photostudio/contracts';
 import { StationOrchestrator } from './orchestrator.js';
@@ -27,9 +33,81 @@ function safeHandle(channel: string, listener: (event: Electron.IpcMainInvokeEve
   ipcMain.handle(channel, listener);
 }
 
+export interface CustomerDisplayControlService {
+  getOverview(): DisplayOverview | Promise<DisplayOverview>;
+  saveSettings(settings: DisplaySettings): DisplayOverview | Promise<DisplayOverview>;
+  identifyDisplay(fingerprint: string): void | Promise<void>;
+  openWiredDisplay(fingerprint: string): DisplayOverview | Promise<DisplayOverview>;
+  closeWiredDisplay(): DisplayOverview | Promise<DisplayOverview>;
+  startTabletDisplay(host: string, port: number): DisplayOverview | Promise<DisplayOverview>;
+  stopTabletDisplay(): DisplayOverview | Promise<DisplayOverview>;
+  resetTabletPairing(): DisplayOverview | Promise<DisplayOverview>;
+  resetCustomerSession(): void | Promise<void>;
+  onStatus(listener: (overview: DisplayOverview) => void): () => void;
+}
+
+function registerDisplayIpcHandlers(service: CustomerDisplayControlService): void {
+  safeHandle('odc:display:get-overview', async (_event, rawPayload: unknown) => {
+    z.undefined().parse(rawPayload);
+    return DisplayOverviewSchema.parse(await service.getOverview());
+  });
+  safeHandle('odc:display:save-settings', async (_event, rawPayload: unknown) => {
+    const settings = SaveDisplaySettingsIpcRequestSchema.parse(rawPayload);
+    return DisplayOverviewSchema.parse(await service.saveSettings(settings));
+  });
+  safeHandle('odc:display:identify', async (_event, rawPayload: unknown) => {
+    const { fingerprint } = DisplayFingerprintIpcRequestSchema.parse(rawPayload);
+    await service.identifyDisplay(fingerprint);
+  });
+  safeHandle('odc:display:open-wired', async (_event, rawPayload: unknown) => {
+    const { fingerprint } = DisplayFingerprintIpcRequestSchema.parse(rawPayload);
+    return DisplayOverviewSchema.parse(await service.openWiredDisplay(fingerprint));
+  });
+  safeHandle('odc:display:close-wired', async (_event, rawPayload: unknown) => {
+    z.undefined().parse(rawPayload);
+    return DisplayOverviewSchema.parse(await service.closeWiredDisplay());
+  });
+  safeHandle('odc:display:start-tablet', async (_event, rawPayload: unknown) => {
+    const { host, port } = StartTabletDisplayIpcRequestSchema.parse(rawPayload);
+    return DisplayOverviewSchema.parse(await service.startTabletDisplay(host, port));
+  });
+  safeHandle('odc:display:stop-tablet', async (_event, rawPayload: unknown) => {
+    z.undefined().parse(rawPayload);
+    return DisplayOverviewSchema.parse(await service.stopTabletDisplay());
+  });
+  safeHandle('odc:display:reset-pairing', async (_event, rawPayload: unknown) => {
+    z.undefined().parse(rawPayload);
+    return DisplayOverviewSchema.parse(await service.resetTabletPairing());
+  });
+  safeHandle('odc:display:reset-session', async (_event, rawPayload: unknown) => {
+    z.undefined().parse(rawPayload);
+    await service.resetCustomerSession();
+  });
+
+  const subscriptions = new Map<number, () => void>();
+  const unsubscribe = (senderId: number) => {
+    subscriptions.get(senderId)?.();
+    subscriptions.delete(senderId);
+  };
+  ipcMain.removeAllListeners('odc:display:status-subscribe');
+  ipcMain.removeAllListeners('odc:display:status-unsubscribe');
+  ipcMain.on('odc:display:status-subscribe', (event) => {
+    unsubscribe(event.sender.id);
+    const stop = service.onStatus((overview) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('odc:display:status', DisplayOverviewSchema.parse(overview));
+      }
+    });
+    subscriptions.set(event.sender.id, stop);
+    event.sender.once('destroyed', () => unsubscribe(event.sender.id));
+  });
+  ipcMain.on('odc:display:status-unsubscribe', (event) => unsubscribe(event.sender.id));
+}
+
 export function registerValidatedIpcHandlers(
   orchestrator: StationOrchestrator,
-  httpTransport?: HttpCloudSyncTransport
+  httpTransport?: HttpCloudSyncTransport,
+  displayControl?: CustomerDisplayControlService
 ): void {
   safeHandle('odc:preflight:status', (_event, rawPayload: unknown) => {
     const { eventId } = z.object({ eventId: z.string().uuid() }).parse(rawPayload);
@@ -196,6 +274,8 @@ export function registerValidatedIpcHandlers(
       maxTransactionsPerDay
     };
   });
+
+  if (displayControl) registerDisplayIpcHandlers(displayControl);
 }
 
 export function createOperatorWindow(preloadPath: string, rendererUrl: string): BrowserWindow {

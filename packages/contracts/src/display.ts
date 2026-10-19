@@ -168,9 +168,17 @@ export const DisplayStreamMetricsSchema = z.object({
 });
 export type DisplayStreamMetrics = z.infer<typeof DisplayStreamMetricsSchema>;
 
+export const PrivateNetworkInterfaceSchema = z.object({
+  name: z.string().min(1).max(200),
+  address: z.string().refine(isPrivateOrLoopbackIpv4, 'A private IPv4 address is required'),
+  internal: z.boolean()
+});
+export type PrivateNetworkInterface = z.infer<typeof PrivateNetworkInterfaceSchema>;
+
 export const DisplayOverviewSchema = z.object({
   settings: DisplaySettingsSchema,
   targets: z.array(DisplayTargetSchema),
+  interfaces: z.array(PrivateNetworkInterfaceSchema).default([]),
   wired: WiredDisplayStatusSchema,
   tablet: TabletDisplayStatusSchema,
   metrics: DisplayStreamMetricsSchema
@@ -190,4 +198,3 @@ export type StartTabletDisplayIpcRequest = z.infer<typeof StartTabletDisplayIpcR
 
 export const SaveDisplaySettingsIpcRequestSchema = DisplaySettingsSchema;
 export type SaveDisplaySettingsIpcRequest = DisplaySettings;
-

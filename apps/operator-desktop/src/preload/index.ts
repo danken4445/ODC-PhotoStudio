@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   CreateSessionIpcRequest,
+  DisplayOverview,
+  DisplaySettings,
   ResolveUnknownPrintIpcRequest,
   StationPreflightStatus,
   SubmitPrintIpcRequest,
@@ -73,6 +75,16 @@ export interface OperatorDesktopBridge {
     dailyTransactionsCount?: number;
     maxTransactionsPerDay?: number | null;
   }>;
+  getDisplayOverview(): Promise<DisplayOverview>;
+  saveDisplaySettings(settings: DisplaySettings): Promise<DisplayOverview>;
+  identifyDisplay(req: { fingerprint: string }): Promise<void>;
+  openWiredDisplay(req: { fingerprint: string }): Promise<DisplayOverview>;
+  closeWiredDisplay(): Promise<DisplayOverview>;
+  startTabletDisplay(req: { host: string; port: number }): Promise<DisplayOverview>;
+  stopTabletDisplay(): Promise<DisplayOverview>;
+  resetTabletPairing(): Promise<DisplayOverview>;
+  resetCustomerSession(): Promise<void>;
+  onDisplayStatus(listener: (overview: DisplayOverview) => void): () => void;
 }
 
 const api: OperatorDesktopBridge = {
@@ -95,7 +107,30 @@ const api: OperatorDesktopBridge = {
   enrollStation: (params: { serverUrl: string; code: string; deviceLabel?: string }) =>
     ipcRenderer.invoke('odc:station:enroll', params),
   getStationEnrollmentStatus: () =>
-    ipcRenderer.invoke('odc:station:enrollment-status')
+    ipcRenderer.invoke('odc:station:enrollment-status'),
+  getDisplayOverview: () => ipcRenderer.invoke('odc:display:get-overview'),
+  saveDisplaySettings: (settings: DisplaySettings) =>
+    ipcRenderer.invoke('odc:display:save-settings', settings),
+  identifyDisplay: (req: { fingerprint: string }) =>
+    ipcRenderer.invoke('odc:display:identify', req),
+  openWiredDisplay: (req: { fingerprint: string }) =>
+    ipcRenderer.invoke('odc:display:open-wired', req),
+  closeWiredDisplay: () => ipcRenderer.invoke('odc:display:close-wired'),
+  startTabletDisplay: (req: { host: string; port: number }) =>
+    ipcRenderer.invoke('odc:display:start-tablet', req),
+  stopTabletDisplay: () => ipcRenderer.invoke('odc:display:stop-tablet'),
+  resetTabletPairing: () => ipcRenderer.invoke('odc:display:reset-pairing'),
+  resetCustomerSession: () => ipcRenderer.invoke('odc:display:reset-session'),
+  onDisplayStatus: (listener: (overview: DisplayOverview) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, overview: DisplayOverview) =>
+      listener(overview);
+    ipcRenderer.on('odc:display:status', wrapped);
+    ipcRenderer.send('odc:display:status-subscribe');
+    return () => {
+      ipcRenderer.removeListener('odc:display:status', wrapped);
+      ipcRenderer.send('odc:display:status-unsubscribe');
+    };
+  }
 };
 
 if (typeof contextBridge !== 'undefined' && contextBridge.exposeInMainWorld) {
