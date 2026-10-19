@@ -91,6 +91,11 @@ export class CustomerDisplayCoordinator {
     this.broker.publishSnapshot(this.snapshot);
   }
 
+  public setMirroredLiveView(mirrored: boolean): void {
+    if (this.closed || this.snapshot.mirroredLiveView === mirrored) return;
+    this.publish({ mirroredLiveView: mirrored });
+  }
+
   public subscribe(listener: SnapshotListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

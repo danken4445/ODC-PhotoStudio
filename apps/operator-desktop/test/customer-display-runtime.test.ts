@@ -309,4 +309,29 @@ describe('CustomerDisplayRuntime', () => {
     await expect(capture).resolves.toMatchObject({ assetId: 'asset-0' });
     await runtime.close();
   });
+
+  it('applies the mirrored live view setting to the customer snapshot', async () => {
+    const { runtime } = createHarness(settings({ mirroredLiveView: false }));
+    await runtime.initialize();
+    expect(runtime.getSnapshot().mirroredLiveView).toBe(false);
+    await runtime.saveSettings(settings({ mirroredLiveView: true }));
+    expect(runtime.getSnapshot().mirroredLiveView).toBe(true);
+    await runtime.close();
+  });
+
+  it('never starts duplicate producers on repeated events and stops live view exactly once', async () => {
+    const { runtime, tablet, camera } = createHarness(
+      settings({ mode: 'tablet', tabletBindAddress: '192.168.1.20' })
+    );
+    await runtime.initialize();
+    tablet.emit({ ...tablet.getStatus() });
+    tablet.emit({ ...tablet.getStatus() });
+    expect(camera.starts).toBe(1);
+    tablet.emit({ ...tablet.getStatus(), state: 'reconnecting' });
+    tablet.emit({ ...tablet.getStatus(), state: 'error' });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(camera.stops).toBe(1);
+    await runtime.close();
+    expect(camera.stops).toBe(1);
+  });
 });

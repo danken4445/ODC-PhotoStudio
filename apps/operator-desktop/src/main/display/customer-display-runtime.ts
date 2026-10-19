@@ -258,6 +258,7 @@ export class CustomerDisplayRuntime {
   }
 
   private async applySettings(settings: DisplaySettings): Promise<void> {
+    this.coordinator.setMirroredLiveView(settings.mirroredLiveView);
     const wantsWired = settings.mode === 'wired' || settings.mode === 'both';
     const wantsTablet = settings.mode === 'tablet' || settings.mode === 'both';
 
