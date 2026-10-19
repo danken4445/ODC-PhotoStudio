@@ -212,3 +212,8 @@ $$;
 
 revoke all on function public.platform_onboard_tenant from public;
 grant execute on function public.platform_onboard_tenant to authenticated, service_role;
+
+-- 7. Insert Superadmin User
+insert into public.platform_admins (user_id, role)
+values ('57ee24a7-144a-47f4-b13b-7c5756f48cbb', 'superadmin')
+on conflict (user_id) do update set role = 'superadmin';
