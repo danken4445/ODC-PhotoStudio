@@ -5,3 +5,4 @@ export * from './api.js';
 export * from './ipc.js';
 export * from './plans.js';
 export * from './platform.js';
+export * from './display.js';
