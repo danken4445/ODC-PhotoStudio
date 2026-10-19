@@ -220,7 +220,12 @@ export class LatestFrameBroker {
 
   private offerSnapshot(state: SinkState, snapshot: CustomerDisplaySnapshot): void {
     state.pendingSnapshotRevision = snapshot.revision;
-    state.sink.offerSnapshot(snapshot);
+    try {
+      state.sink.offerSnapshot(snapshot);
+    } catch {
+      this.disconnectSink(state, 'DISPLAY_SINK_ERROR');
+      return;
+    }
     this.clearSnapshotTimer(state);
     state.snapshotTimer = this.setTimeoutFn(
       () => this.disconnectSink(state, 'DISPLAY_SINK_PRIORITY_TIMEOUT'),
@@ -231,7 +236,13 @@ export class LatestFrameBroker {
   private offerFrame(state: SinkState, frame: CustomerDisplayFrame): void {
     state.pendingFrameSequence = frame.meta.sequence;
     if (state.queuedLiveSequence === frame.meta.sequence) state.queuedLiveSequence = null;
-    const accepted = state.sink.offerFrame(frame);
+    let accepted: boolean;
+    try {
+      accepted = state.sink.offerFrame(frame);
+    } catch {
+      this.disconnectSink(state, 'DISPLAY_SINK_ERROR');
+      return;
+    }
     if (!accepted && frame.meta.kind === 'live') {
       state.pendingFrameSequence = null;
       this.framesDropped += 1;
@@ -239,6 +250,7 @@ export class LatestFrameBroker {
     }
     if (frame.meta.kind === 'preview') this.armFrameTimeout(state);
   }
+
 
   private flushFrame(state: SinkState): void {
     if (state.pendingFrameSequence !== null) return;
@@ -269,7 +281,11 @@ export class LatestFrameBroker {
 
   private disconnectSink(state: SinkState, reason: string): void {
     this.removeSink(state.sink.id);
-    state.sink.disconnect(reason);
+    try {
+      state.sink.disconnect(reason);
+    } catch {
+      // a failing display sink must never affect capture
+    }
   }
 
   private removeSink(sinkId: string): void {

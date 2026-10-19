@@ -24,7 +24,7 @@ interface CustomerDisplayCoordinatorOptions {
 
 interface CaptureResult<T> {
   result: T;
-  previewJpeg: Uint8Array;
+  previewJpeg: Uint8Array | null;
   allCaptured: boolean;
 }
 
@@ -149,6 +149,16 @@ export class CustomerDisplayCoordinator {
       const captureResult = await options.capture();
       this.shutterExecuting = false;
       this.throwIfAborted(abortController.signal);
+
+      if (captureResult.previewJpeg === null) {
+        this.captureAbortController = null;
+        this.publish({
+          phase: captureResult.allCaptured ? 'review' : 'live',
+          countdownValue: null,
+          previewFrameSequence: null
+        });
+        return captureResult.result;
+      }
 
       const previewFrameSequence = this.broker.publishPreview(captureResult.previewJpeg, this.now());
       this.publish({ phase: 'preview', previewFrameSequence, countdownValue: null });

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { app, BrowserWindow, ipcMain, session as electronSession } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, session as electronSession } from 'electron';
 import { z } from 'zod';
 import {
   CreateSessionIpcRequestSchema,
@@ -21,6 +21,15 @@ import { MockCameraProvider, type ICameraProvider } from './camera/provider.js';
 import { RealCameraProvider } from './camera/real-camera-provider.js';
 import { MockPrinterProvider, type IPrinterProvider } from './printer/provider.js';
 import { WindowsSpoolerPrinterProvider } from './printer/windows-spooler-provider.js';
+import { CustomerDisplayRuntime } from './display/customer-display-runtime.js';
+import { loadDisplaySettings, saveDisplaySettings } from './display/display-settings.js';
+import { LatestFrameBroker } from './display/frame-broker.js';
+import { TabletDisplayServer } from './display/tablet-display-server.js';
+import {
+  WiredDisplayManager,
+  type CustomerWindow,
+  type ElectronScreenAdapter
+} from './display/wired-display-manager.js';
 import {
   CONTENT_SECURITY_POLICY,
   SECURITY_WINDOW_PREFERENCES
@@ -44,6 +53,17 @@ export interface CustomerDisplayControlService {
   resetTabletPairing(): DisplayOverview | Promise<DisplayOverview>;
   resetCustomerSession(): void | Promise<void>;
   onStatus(listener: (overview: DisplayOverview) => void): () => void;
+  beginSession?(input: { sessionId: string; shotCount: number }): void;
+  captureFrame?(params: {
+    sessionId: string;
+    frameIndex: number;
+  }): Promise<{ assetId: string; frameIndex: number; captureState: string }>;
+  approveSession?(sessionId: string): Promise<{
+    sessionId: string;
+    captureState: string;
+    compositeState: string;
+    uploadState: string;
+  }>;
 }
 
 function registerDisplayIpcHandlers(service: CustomerDisplayControlService): void {
@@ -120,11 +140,18 @@ export function registerValidatedIpcHandlers(
       eventId: req.eventId,
       templateVersionId: req.templateVersionId
     });
+    displayControl?.beginSession?.({
+      sessionId: session.session_id,
+      shotCount: orchestrator.getTemplateRequiredShotCount(req.eventId, req.templateVersionId)
+    });
     return { sessionId: session.session_id };
   });
 
   safeHandle('odc:session:capture', async (_event, rawPayload: unknown) => {
     const req = TriggerCaptureIpcRequestSchema.parse(rawPayload);
+    if (displayControl?.captureFrame) {
+      return displayControl.captureFrame({ sessionId: req.sessionId, frameIndex: req.frameIndex });
+    }
     const { session, capture } = await orchestrator.captureFrame({
       sessionId: req.sessionId,
       frameIndex: req.frameIndex
@@ -138,6 +165,9 @@ export function registerValidatedIpcHandlers(
 
   safeHandle('odc:session:approve', async (_event, rawPayload: unknown) => {
     const { sessionId } = z.object({ sessionId: z.string().uuid() }).parse(rawPayload);
+    if (displayControl?.approveSession) {
+      return displayControl.approveSession(sessionId);
+    }
     const { session } = await orchestrator.approveAndCompositeSession({ sessionId });
     return {
       sessionId: session.session_id,
@@ -326,6 +356,7 @@ export function createOperatorWindow(preloadPath: string, rendererUrl: string): 
 }
 
 let activeOrchestrator: StationOrchestrator | null = null;
+let activeDisplayRuntime: CustomerDisplayRuntime | null = null;
 let backgroundSyncTimer: NodeJS.Timeout | null = null;
 
 export async function bootstrapMainProcess(): Promise<{
@@ -389,8 +420,42 @@ export async function bootstrapMainProcess(): Promise<{
     baseUrl: portalApiUrl
   });
 
-  // 6. Register validated IPC handlers
-  registerValidatedIpcHandlers(orchestrator, httpTransport);
+  // 6. Compose the customer display runtime (Electron-only) and register validated IPC handlers
+  let displayRuntime: CustomerDisplayRuntime | undefined;
+  if (app?.isReady && app.isReady()) {
+    const broker = new LatestFrameBroker();
+    const rendererDir = path.join(__dirname, '../renderer');
+    const devRendererUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+    const isDevRenderer = process.env.NODE_ENV === 'development' || !app.isPackaged;
+    const wired = new WiredDisplayManager({
+      screen: screen as unknown as ElectronScreenAdapter,
+      windows: {
+        create: (options) => new BrowserWindow(options as Electron.BrowserWindowConstructorOptions) as unknown as CustomerWindow
+      },
+      broker,
+      customerPreloadPath: path.join(__dirname, '../preload/display.js'),
+      rendererEntry: isDevRenderer ? devRendererUrl : path.join(rendererDir, 'index.html')
+    });
+    const tablet = new TabletDisplayServer({ broker });
+    displayRuntime = new CustomerDisplayRuntime({
+      orchestrator,
+      camera,
+      broker,
+      wired,
+      tablet,
+      rendererRoot: rendererDir,
+      loadSettings: () => loadDisplaySettings(orchestrator.db),
+      saveSettings: (settings) => saveDisplaySettings(orchestrator.db, settings)
+    });
+    activeDisplayRuntime = displayRuntime;
+    try {
+      await displayRuntime.initialize();
+    } catch (err) {
+      // Display problems must never prevent capture, approval, printing, or sync.
+      console.warn('Customer display initialization warning:', err);
+    }
+  }
+  registerValidatedIpcHandlers(orchestrator, httpTransport, displayRuntime);
 
   // 7. Start background sync timer (every 3 seconds)
   if (backgroundSyncTimer) {
@@ -438,11 +503,20 @@ if (app && typeof app.whenReady === 'function') {
           clearInterval(backgroundSyncTimer);
           backgroundSyncTimer = null;
         }
-        if (activeOrchestrator) {
-          activeOrchestrator.close();
-          activeOrchestrator = null;
-        }
-        app.quit();
+        void (async () => {
+          const runtime = activeDisplayRuntime;
+          activeDisplayRuntime = null;
+          try {
+            await runtime?.close();
+          } catch (err) {
+            console.warn('Customer display shutdown warning:', err);
+          }
+          if (activeOrchestrator) {
+            activeOrchestrator.close();
+            activeOrchestrator = null;
+          }
+          app.quit();
+        })();
       }
     });
   }

@@ -371,6 +371,19 @@ export class StationOrchestrator {
     };
   }
 
+  public getTemplateRequiredShotCount(eventId: string, templateVersionId: string): number {
+    const prepared = this.db.getPreparedEventPackage(eventId);
+    if (!prepared) {
+      throw new Error('EVENT_NOT_PREPARED');
+    }
+    const config = JSON.parse(prepared.packageJson) as CachedEventConfiguration;
+    const template = config.templates.find((t) => t.templateVersionId === templateVersionId);
+    if (!template) {
+      throw new Error(`Template version ${templateVersionId} not found in event package`);
+    }
+    return template.definition.requiredShots;
+  }
+
   public getProtectedGalleryUrl(sessionId: string): string {
     const session = this.db.getSessionOrThrow(sessionId);
     const prepared = this.db.getPreparedEventPackage(session.event_id);
