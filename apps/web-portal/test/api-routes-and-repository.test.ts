@@ -222,6 +222,81 @@ describe('Phase 2B: Supabase Repository & Next.js API Routes', () => {
     expect(data.serverTimeIso).toBeDefined();
   });
 
+  it('POST /api/v1/station/prepare-grant succeeds with odc_tenant_token even when odc_admin_token cookie is present', async () => {
+    const req = new NextRequest('http://localhost:3000/api/v1/station/prepare-grant', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: `odc_admin_token=mock-token-57ee24a7-144a-47f4-b13b-7c5756f48cbb; odc_tenant_token=mock-token-${OPERATOR_ID}`
+      },
+      body: JSON.stringify({
+        apiVersion: 'v1',
+        tenantId: TENANT_ID,
+        eventId: EVENT_ID,
+        stationId: STATION_ID,
+        deviceLabel: 'Alpha Station'
+      })
+    });
+
+    const res = await prepareGrantHandler(req);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.offlineGrant.payload.operatorId).toBe(OPERATOR_ID);
+  });
+
+  it('POST /api/v1/station/prepare-grant succeeds when invoked by platform admin', async () => {
+    const SUPERADMIN_ID = '57ee24a7-144a-47f4-b13b-7c5756f48cbb';
+    const req = new NextRequest('http://localhost:3000/api/v1/station/prepare-grant', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: `odc_admin_token=mock-token-${SUPERADMIN_ID}`
+      },
+      body: JSON.stringify({
+        apiVersion: 'v1',
+        tenantId: TENANT_ID,
+        eventId: EVENT_ID,
+        stationId: STATION_ID,
+        deviceLabel: 'Alpha Station'
+      })
+    });
+
+    const res = await prepareGrantHandler(req);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.offlineGrant.payload.operatorId).toBe(SUPERADMIN_ID);
+  });
+
+  it('POST /api/v1/station/prepare-grant succeeds with default template when event has no custom templates', async () => {
+    // Register an event with 0 templates in fallback
+    const repo = new SupabaseCloudPortalRepository();
+    const fallback = repo.getFallbackService();
+    const emptyEventId = '20000000-0000-4000-8000-000000000099';
+    fallback.registerEvent({
+      id: emptyEventId,
+      tenantId: TENANT_ID,
+      name: 'Event Without Templates',
+      timezone: 'Asia/Manila',
+      startsAt: '2026-10-18T00:00:00.000Z',
+      endsAt: '2026-10-25T00:00:00.000Z',
+      status: 'active',
+      assignedOperatorIds: new Set([OPERATOR_ID]),
+      assignedStationIds: new Set([STATION_ID]),
+      templateVersionIds: new Set()
+    });
+
+    const grant = await repo.issueOfflineEventGrant({
+      actorUserId: OPERATOR_ID,
+      tenantId: TENANT_ID,
+      eventId: emptyEventId,
+      stationId: STATION_ID,
+      nowIso: '2026-10-20T12:00:00Z'
+    });
+
+    expect(grant.payload.permittedTemplateVersionIds).toHaveLength(1);
+    expect(grant.payload.permittedTemplateVersionIds[0]).toBe('60000000-0000-4000-8000-000000000001');
+  });
+
   it('GET /api/v1/gallery/[token] returns unknown_unavailable for invalid token without leaking claims', async () => {
     const unknownToken = 'B'.repeat(43);
     const req = new NextRequest(`http://localhost:3000/api/v1/gallery/${unknownToken}`);

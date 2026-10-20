@@ -46,9 +46,10 @@ export async function extractActorUserId(
   if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
     token = authHeader.slice(7).trim();
   } else {
+    // Check odc_tenant_token first so an active tenant session is not masked by an existing superadmin cookie
     token =
-      req.cookies.get('odc_admin_token')?.value ||
       req.cookies.get('odc_tenant_token')?.value ||
+      req.cookies.get('odc_admin_token')?.value ||
       null;
   }
 
